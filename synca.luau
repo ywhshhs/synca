@@ -19,12 +19,25 @@ local SubPages = {
 local SectionMain = SubPages["Aimbot"]:Section({Name = "Main"})
 local SectionAdvanced = SubPages["Aimbot"]:Section({Name = "Advanced"})
 
+-- Config storage
+local C = {
+    Enable = false,
+    AutoTarget = false,
+    TeamCheck = false,
+    FOV = false,
+    FOVSize = 100,
+    WallCheck = false,
+    Smoothness = 10,
+    Prediction = 5,
+}
+
 -- Toggle: Enable Aimbot
 SectionMain:Toggle({
     Name = "Enable",
     Flag = "Enable",
     Default = false,
     Callback = function(Value)
+        C.Enable = Value
         if Value then
             Library:Notification("Aimbot Enabled", 2, Library.Theme.Accent)
         else
@@ -33,12 +46,13 @@ SectionMain:Toggle({
     end
 })
 
--- Toggle: AutoTarget (mobile - auto lock onto targets in FOV)
+-- Toggle: AutoTarget
 SectionMain:Toggle({
     Name = "Auto Target",
     Flag = "AutoTarget",
     Default = false,
     Callback = function(Value)
+        C.AutoTarget = Value
         if Value then
             Library:Notification("Auto Target On", 2, Library.Theme.Accent)
         else
@@ -53,6 +67,7 @@ SectionMain:Toggle({
     Flag = "TeamCheck",
     Default = false,
     Callback = function(Value)
+        C.TeamCheck = Value
         if Value then
             Library:Notification("Team Check On", 1, Library.Theme.Accent)
         end
@@ -65,7 +80,8 @@ SectionMain:Toggle({
     Flag = "FOV",
     Default = false,
     Callback = function(Value)
-        fovCircle.Visible = Value and (Library.Flags["Enable"] or Library.Flags["AutoTarget"])
+        C.FOV = Value
+        fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
         if Value then
             Library:Notification("FOV On", 1, Library.Theme.Accent)
         else
@@ -84,6 +100,7 @@ SectionMain:Slider({
     Decimals = 0,
     Suffix = " px",
     Callback = function(Value)
+        C.FOVSize = Value
         fovCircle.Radius = Value
     end
 })
@@ -94,6 +111,7 @@ SectionMain:Toggle({
     Flag = "WallCheck",
     Default = false,
     Callback = function(Value)
+        C.WallCheck = Value
         if Value then
             Library:Notification("Wall Check On", 1, Library.Theme.Accent)
         end
@@ -107,8 +125,11 @@ SectionMain:Keybind({
     Default = Enum.KeyCode.RightShift,
     Mode = "Toggle",
     Callback = function(Value)
-        -- Value is the toggled state from the keybind
-        -- handled by the main Enable toggle through the keybind UI
+        if Value then
+            C.Enable = true
+        else
+            C.Enable = false
+        end
     end
 })
 
@@ -122,7 +143,7 @@ SectionAdvanced:Slider({
     Decimals = 1,
     Suffix = "x",
     Callback = function(Value)
-        -- smoothness multiplier (higher = smoother/slower aim)
+        C.Smoothness = Value
     end
 })
 
@@ -136,14 +157,14 @@ SectionAdvanced:Slider({
     Decimals = 1,
     Suffix = " studs",
     Callback = function(Value)
-        -- how many studs forward to aim based on enemy velocity
+        C.Prediction = Value
     end
 })
 
 -- Create Settings Page
 local SettingsPage = Library:CreateSettingsPage(Window, KeybindList, Watermark)
 
--- Drawing objects for FOV circle visualization
+-- Drawing objects
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false
 fovCircle.Thickness = 2
@@ -165,21 +186,19 @@ local AIMBOT = {
     TargetPart = nil,
 }
 
--- Helper: Get team ID of a player
+-- Helpers
 local function getTeam(player)
     if not player or not player.Team then return nil end
     return player.Team.TeamId
 end
 
--- Helper: Check if target is on same team
 local function isTeamMate(player)
-    if not AIMBOT.TeamCheck then return false end
+    if not C.TeamCheck then return false end
     if not player or not player.Team then return false end
     if not game.Players.LocalPlayer.Team then return false end
     return getTeam(player) == getTeam(game.Players.LocalPlayer)
 end
 
--- Helper: Check if player is a valid target
 local function isValidTarget(player)
     if not player then return false end
     if player == game.Players.LocalPlayer then return false end
@@ -190,7 +209,6 @@ local function isValidTarget(player)
     return true
 end
 
--- Helper: Get head position and part
 local function getHeadInfo(player)
     local char = player.Character
     if not char then return nil, nil end
@@ -199,9 +217,8 @@ local function getHeadInfo(player)
     return head.Position, head
 end
 
--- Helper: Raycast to check if target is visible (wall check)
 local function canSeeTarget(targetPos)
-    if not AIMBOT.WallCheck then return true end
+    if not C.WallCheck then return true end
     local cameraPos = workspace.CurrentCamera.CFrame.Position
     local direction = targetPos - cameraPos
     local rayParams = RaycastParams.new()
@@ -212,18 +229,16 @@ local function canSeeTarget(targetPos)
     return true
 end
 
--- Helper: Check if target position is within FOV circle
 local function isInFOV(targetPos)
-    if not AIMBOT.FOVEnabled then return true end
+    if not C.FOV then return true end
     local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(targetPos)
     if not onScreen then return false end
     local centerX = workspace.CurrentCamera.ViewportSize.X / 2
     local centerY = workspace.CurrentCamera.ViewportSize.Y / 2
     local distance = math.sqrt((screenPos.X - centerX)^2 + (screenPos.Y - centerY)^2)
-    return distance <= AIMBOT.FOVSize
+    return distance <= C.FOVSize
 end
 
--- Helper: Find closest valid target
 local function findClosestTarget()
     local closest = nil
     local closestDist = math.huge
@@ -243,7 +258,6 @@ local function findClosestTarget()
     return closest
 end
 
--- Helper: Execute aim with prediction and smoothness
 local function executeAim(target)
     local headPos, headPart = getHeadInfo(target)
     if not headPos then return end
@@ -254,15 +268,13 @@ local function executeAim(target)
         velocity = root.Velocity
     end
 
-    -- Prediction: aim ahead based on enemy velocity direction
     local lookDir = velocity.Magnitude > 0 and velocity.Unit or workspace.CurrentCamera.CFrame.LookVector
-    local predictedPos = headPos + (lookDir * AIMBOT.Prediction)
+    local predictedPos = headPos + (lookDir * C.Prediction)
 
     local targetCF = CFrame.lookAt(workspace.CurrentCamera.CFrame.Position, predictedPos)
 
-    -- Smooth interpolation
-    if AIMBOT.Smoothness > 0 then
-        local alpha = math.clamp(AIMBOT.Smoothness * 0.016, 0, 0.15)
+    if C.Smoothness > 0 then
+        local alpha = math.clamp(C.Smoothness * 0.016, 0, 0.15)
         workspace.CurrentCamera.CFrame = workspace.CurrentCamera.CFrame:Lerp(targetCF, alpha)
     else
         workspace.CurrentCamera.CFrame = targetCF
@@ -273,38 +285,26 @@ end
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     local screenCenter = workspace.CurrentCamera.ViewportSize / 2
     fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
-    fovCircle.Radius = AIMBOT.FOVSize
+    fovCircle.Radius = C.FOVSize
 
-    -- Read all config values from Pandora library flags
-    AIMBOT.Enabled = Library.Flags["Enable"] or false
-    AIMBOT.AutoTarget = Library.Flags["AutoTarget"] or false
-    AIMBOT.TeamCheck = Library.Flags["TeamCheck"] or false
-    AIMBOT.FOVEnabled = Library.Flags["FOV"] or false
-    AIMBOT.FOVSize = Library.Flags["FOVSize"] or 100
-    AIMBOT.WallCheck = Library.Flags["WallCheck"] or false
-    AIMBOT.Smoothness = Library.Flags["Smoothness"] or 10
-    AIMBOT.Prediction = Library.Flags["Prediction"] or 5
+    -- Update FOV visibility
+    fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
+    crosshair.Visible = C.Enable or C.AutoTarget
 
-    -- Update FOV circle visibility
-    fovCircle.Visible = AIMBOT.FOVEnabled and (AIMBOT.Enabled or AIMBOT.AutoTarget)
-    crosshair.Visible = AIMBOT.Enabled or AIMBOT.AutoTarget
-
-    -- Update aimbot state
-    if AIMBOT.AutoTarget then
-        -- AutoTarget mode: automatically lock onto any player in FOV
+    -- AutoTarget mode
+    if C.AutoTarget then
         local target = findClosestTarget()
         if target then
             AIMBOT.Target = target
             AIMBOT.TargetPart = getHeadInfo(target)[2]
-            AIMBOT.Enabled = true
+            C.Enable = true
             executeAim(target)
         else
             AIMBOT.Target = nil
             AIMBOT.TargetPart = nil
-            AIMBOT.Enabled = false
+            C.Enable = false
         end
-    elseif AIMBOT.Enabled then
-        -- Manual mode: find and aim at closest target
+    elseif C.Enable then
         local target = findClosestTarget()
         if target then
             AIMBOT.Target = target
@@ -317,6 +317,6 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
     end
 end)
 
--- Load notification
+-- Notification
 task.wait(1)
-Library:Notification("Aimbot loaded successfully", 5, Library.Theme.Accent)
+Library:Notification("Aimbot loaded - press RightControl to toggle UI", 5, Library.Theme.Accent)
