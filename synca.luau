@@ -1,23 +1,15 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/sametexe001/sametlibs/refs/heads/main/Pandora/Library.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/sametexe001/sametlibs/refs/heads/main/Thugsense/Library.lua"))()
 
 local Window = Library:Window({
-    Logo = "rbxassetid://124454910007637",
-    Build = "developer"
+    Name = "Aimbot",
+    FadeSpeed = 0.25
 })
 
+local Watermark = Library:Watermark("Aimbot")
 local KeybindList = Library:KeybindList()
-local Watermark = Library:Watermark("Aimbot", "rbxassetid://124454910007637")
 
-local Pages = {
-    ["Combat"] = Window:Page({Icon = "rbxassetid://113972874520335"})
-}
-
-local SubPages = {
-    ["Aimbot"] = Pages["Combat"]:SubPage({Name = "Aimbot"})
-}
-
-local SectionMain = SubPages["Aimbot"]:Section({Name = "Main"})
-local SectionAdvanced = SubPages["Aimbot"]:Section({Name = "Advanced"})
+local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
+local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
 -- Config storage
 local C = {
@@ -31,140 +23,57 @@ local C = {
     Prediction = 5,
 }
 
--- Toggle: Enable Aimbot
-SectionMain:Toggle({
-    Name = "Enable",
-    Flag = "Enable",
-    Default = false,
-    Callback = function(Value)
-        C.Enable = Value
-        if Value then
-            Library:Notification("Aimbot Enabled", 2, Library.Theme.Accent)
-        else
-            Library:Notification("Aimbot Disabled", 2, Library.Theme["Dark Accent"])
-        end
-    end
-})
+-- Sections
+local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
+local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = 2})
 
--- Toggle: AutoTarget
-SectionMain:Toggle({
-    Name = "Auto Target",
-    Flag = "AutoTarget",
-    Default = false,
-    Callback = function(Value)
-        C.AutoTarget = Value
-        if Value then
-            Library:Notification("Auto Target On", 2, Library.Theme.Accent)
-        else
-            Library:Notification("Auto Target Off", 2, Library.Theme["Dark Accent"])
-        end
-    end
-})
+-- Enable toggle with keybind chained on
+AimbotSection:Toggle({Name = "Enable", Flag = "Enable", Default = false, Callback = function(Value)
+    C.Enable = Value
+end}):Keybind({Name = "Hotkey", Flag = "Hotkey", Default = Enum.KeyCode.RightShift, Mode = "Toggle", Callback = function(Value)
+    C.Enable = Value
+end})
 
--- Toggle: Team Check
-SectionMain:Toggle({
-    Name = "Team Check",
-    Flag = "TeamCheck",
-    Default = false,
-    Callback = function(Value)
-        C.TeamCheck = Value
-        if Value then
-            Library:Notification("Team Check On", 1, Library.Theme.Accent)
-        end
-    end
-})
+-- Auto Target toggle (mobile - auto lock onto targets in FOV)
+AimbotSection:Toggle({Name = "Auto Target", Flag = "AutoTarget", Default = false, Callback = function(Value)
+    C.AutoTarget = Value
+end})
 
--- Toggle: FOV Circle
-SectionMain:Toggle({
-    Name = "FOV",
-    Flag = "FOV",
-    Default = false,
-    Callback = function(Value)
-        C.FOV = Value
-        fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
-        if Value then
-            Library:Notification("FOV On", 1, Library.Theme.Accent)
-        else
-            Library:Notification("FOV Off", 1, Library.Theme["Dark Accent"])
-        end
-    end
-})
+-- Team Check toggle
+AimbotSection:Toggle({Name = "Team Check", Flag = "TeamCheck", Default = false, Callback = function(Value)
+    C.TeamCheck = Value
+end})
 
--- Slider: FOV Size
-SectionMain:Slider({
-    Name = "FOV Size",
-    Flag = "FOVSize",
-    Default = 100,
-    Min = 10,
-    Max = 300,
-    Decimals = 0,
-    Suffix = " px",
-    Callback = function(Value)
-        C.FOVSize = Value
-        fovCircle.Radius = Value
-    end
-})
+-- FOV toggle + colorpicker
+AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
+    C.FOV = Value
+    fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
+end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
+    fovCircle.Color = Value
+end})
 
--- Toggle: Wall Check
-SectionMain:Toggle({
-    Name = "Wall Check",
-    Flag = "WallCheck",
-    Default = false,
-    Callback = function(Value)
-        C.WallCheck = Value
-        if Value then
-            Library:Notification("Wall Check On", 1, Library.Theme.Accent)
-        end
-    end
-})
+-- FOV Size slider
+AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 0, Flag = "FOVSize", Callback = function(Value)
+    C.FOVSize = Value
+    fovCircle.Radius = Value
+end})
 
--- Keybind: Toggle Aimbot
-SectionMain:Keybind({
-    Name = "Toggle Aimbot",
-    Flag = "AimbotKeybind",
-    Default = Enum.KeyCode.RightShift,
-    Mode = "Toggle",
-    Callback = function(Value)
-        if Value then
-            C.Enable = true
-        else
-            C.Enable = false
-        end
-    end
-})
+-- Wall Check toggle
+AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, Callback = function(Value)
+    C.WallCheck = Value
+end})
 
--- Slider: Smoothness
-SectionAdvanced:Slider({
-    Name = "Smoothness",
-    Flag = "Smoothness",
-    Default = 10,
-    Min = 1,
-    Max = 30,
-    Decimals = 1,
-    Suffix = "x",
-    Callback = function(Value)
-        C.Smoothness = Value
-    end
-})
+-- Smoothness slider
+AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 30, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
+    C.Smoothness = Value
+end})
 
--- Slider: Prediction
-SectionAdvanced:Slider({
-    Name = "Prediction",
-    Flag = "Prediction",
-    Default = 5,
-    Min = 0,
-    Max = 50,
-    Decimals = 1,
-    Suffix = " studs",
-    Callback = function(Value)
-        C.Prediction = Value
-    end
-})
+-- Prediction slider
+AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
+    C.Prediction = Value
+end})
 
--- Create Settings Page
-local SettingsPage = Library:CreateSettingsPage(Window, KeybindList, Watermark)
-
--- Drawing objects
+-- Drawing objects for FOV visualization
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false
 fovCircle.Thickness = 2
@@ -287,11 +196,11 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
     fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
     fovCircle.Radius = C.FOVSize
 
-    -- Update FOV visibility
+    -- Update FOV visualization
     fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
     crosshair.Visible = C.Enable or C.AutoTarget
 
-    -- AutoTarget mode
+    -- AutoTarget mode (mobile)
     if C.AutoTarget then
         local target = findClosestTarget()
         if target then
@@ -305,6 +214,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             C.Enable = false
         end
     elseif C.Enable then
+        -- Manual mode
         local target = findClosestTarget()
         if target then
             AIMBOT.Target = target
@@ -317,6 +227,8 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
     end
 end)
 
--- Notification
-task.wait(1)
-Library:Notification("Aimbot loaded - press RightControl to toggle UI", 5, Library.Theme.Accent)
+-- Init library
+Library:Init()
+
+-- Load notification
+Library:Notification("Aimbot loaded", 5, Library.Theme.Accent, {"rbxassetid://135757045959142", Color3.fromRGB(149, 255, 139)})
