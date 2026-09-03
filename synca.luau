@@ -2,6 +2,7 @@
 	Universal Aimbot Script
 	Built with Bitch Bot GUI Framework
 	Features: Team Check, FOV Circle, Wall Check, Smoothness, Prediction
+	Mobile Support: AutoTarget toggle for automatic locking
 ]]
 
 local Players = game:GetService("Players")
@@ -15,6 +16,7 @@ local LOCAL_MOUSE = LOCAL_PLAYER:GetMouse()
 -- Aim Bot Configuration
 local AIMBOT = {
 	Enabled = false,
+	AutoTarget = false,
 	TeamCheck = false,
 	FOVEnabled = false,
 	FOVSize = 100,
@@ -137,29 +139,53 @@ local function executeAim(target)
 	end
 end
 
--- Render loop
-RunService.RenderStepped:Connect(function(dt)
-	local screenCenter = Camera.ViewportSize / 2
-	fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
-	fovCircle.Radius = AIMBOT.FOVSize
-	fovCircle.Visible = AIMBOT.FOVEnabled and AIMBOT.Enabled
-
-	if AIMBOT.Enabled then
+-- Update FOV visibility and auto-target logic
+local function updateAimbotState()
+	if AIMBOT.AutoTarget then
+		-- Auto-target mode: automatically lock onto any player in FOV
+		local target = findClosestTarget()
+		if target then
+			AIMBOT.Enabled = true
+			AIMBOT.Target = target
+			AIMBOT.TargetPart = getHeadInfo(target)[2]
+		else
+			AIMBOT.Enabled = false
+			AIMBOT.Target = nil
+			AIMBOT.TargetPart = nil
+		end
+	elseif not AIMBOT.AutoTarget and AIMBOT.Enabled then
+		-- Manual mode: keep running if enabled, find target
 		local target = findClosestTarget()
 		if target then
 			AIMBOT.Target = target
-			executeAim(target)
+			AIMBOT.TargetPart = getHeadInfo(target)[2]
 		else
 			AIMBOT.Target = nil
 			AIMBOT.TargetPart = nil
 		end
 	end
+end
+
+-- Render loop
+RunService.RenderStepped:Connect(function(dt)
+	local screenCenter = Camera.ViewportSize / 2
+	fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
+	fovCircle.Radius = AIMBOT.FOVSize
+	fovCircle.Visible = (AIMBOT.FOVEnabled) and (AIMBOT.Enabled or AIMBOT.AutoTarget)
+
+	updateAimbotState()
+
+	if AIMBOT.Enabled and AIMBOT.Target then
+		executeAim(AIMBOT.Target)
+	end
 end)
 
--- Toggle with DELETE key
+-- Toggle with DELETE key (desktop)
 InputService.InputBegan:Connect(function(input)
 	if input.KeyCode == Enum.KeyCode.Delete then
-		AIMBOT.Enabled = not AIMBOT.Enabled
+		if not AIMBOT.AutoTarget then
+			AIMBOT.Enabled = not AIMBOT.Enabled
+		end
 	end
 end)
 
@@ -167,6 +193,7 @@ end)
 local function saveConfig(data)
 	return {
 		Enabled = AIMBOT.Enabled,
+		AutoTarget = AIMBOT.AutoTarget,
 		TeamCheck = AIMBOT.TeamCheck,
 		FOVEnabled = AIMBOT.FOVEnabled,
 		FOVSize = AIMBOT.FOVSize,
@@ -179,6 +206,7 @@ end
 local function loadConfig(data)
 	if data then
 		AIMBOT.Enabled = data.Enabled or false
+		AIMBOT.AutoTarget = data.AutoTarget or false
 		AIMBOT.TeamCheck = data.TeamCheck or false
 		AIMBOT.FOVEnabled = data.FOVEnabled or false
 		AIMBOT.FOVSize = data.FOVSize or 100
