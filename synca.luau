@@ -19,7 +19,6 @@ local C = {
     Smoothness = 10,
     PredictionEnabled = false,
     Prediction = 5,
-    TargetPart = "Head",
     Tracer = false,
     TracerOrigin = "Cursor",
     Highlight = false,
@@ -37,9 +36,6 @@ local C = {
     ESPTracerColor = Color3.fromRGB(255, 255, 255),
     ESPTracerOrigin = "Bottom",
     StickyLock = true,
-    AutoFire = false,
-    AutoFireDelay = 0.15,
-    AutoFireRange = 25,
     BoxStyle = "Box",
     BoxOutline = false,
     HealthNumber = false,
@@ -256,11 +252,6 @@ AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, 
     C.WallCheck = Value
 end})
 
--- Targeted part (aliases resolve on both R6 and R15, see PART_ALIASES)
-AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "Head", Items = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}, Callback = function(Value)
-    C.TargetPart = Value
-end})
-
 -- Target highlight: one Highlight on the whole character model (every part)
 AimbotSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
     C.Highlight = Value
@@ -290,18 +281,6 @@ end})
 -- Target tracer: line from origin to the currently targeted part
 TargetSection:Toggle({Name = "Sticky Lock", Flag = "StickyLock", Default = true, Callback = function(Value)
     C.StickyLock = Value
-end})
-
-TargetSection:Toggle({Name = "Auto Fire", Flag = "AutoFire", Default = false, Callback = function(Value)
-    C.AutoFire = Value
-end})
-
-TargetSection:Slider({Name = "Fire Delay", Min = 0.05, Max = 1, Default = 0.15, Suffix = "s", Decimals = 2, Flag = "AutoFireDelay", Callback = function(Value)
-    C.AutoFireDelay = Value
-end})
-
-TargetSection:Slider({Name = "Fire Range", Min = 5, Max = 100, Default = 25, Suffix = "px", Decimals = 1, Flag = "AutoFireRange", Callback = function(Value)
-    C.AutoFireRange = Value
 end})
 
 TargetSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
@@ -488,30 +467,13 @@ local function isValidTarget(player)
     return true
 end
 
--- R6 + R15 part resolver: each dropdown option maps to its R6 name first,
--- then the R15 equivalent. Falls back to Head so a missing part never breaks
--- targeting.
-local PART_ALIASES = {
-    ["Head"] = {"Head"},
-    ["HumanoidRootPart"] = {"HumanoidRootPart"},
-    ["Torso"] = {"Torso", "UpperTorso"},
-    ["Left Arm"] = {"Left Arm", "LeftUpperArm"},
-    ["Right Arm"] = {"Right Arm", "RightUpperArm"},
-    ["Left Leg"] = {"Left Leg", "LeftUpperLeg"},
-    ["Right Leg"] = {"Right Leg", "RightUpperLeg"},
-}
-
+-- Aim point is always the Head (isValidTarget already guarantees it exists).
 local function getAimPart(player)
     local char = player and player.Character
     if not char then return nil, nil end
-    local aliases = PART_ALIASES[C.TargetPart] or PART_ALIASES["Head"]
-    for _, name in ipairs(aliases) do
-        local part = char:FindFirstChild(name)
-        if part then return part.Position, part end
-    end
     local head = char:FindFirstChild("Head")
-    if head then return head.Position, head end
-    return nil, nil
+    if not head then return nil, nil end
+    return head.Position, head
 end
 
 -- Wall check must ignore the TARGET's own body too: the old version only
@@ -1084,35 +1046,6 @@ RunService.Heartbeat:Connect(function(dt)
     end)
 end)
 
--- Auto Fire click: executor click first, VirtualInputManager fallback.
--- Non-blocking (release is deferred) so the render loop never yields.
-local lastShot = 0
-local VIM = nil
-pcall(function() VIM = game:GetService("VirtualInputManager") end)
-local function fireClick()
-    if typeof(mouse1click) == "function" then
-        pcall(mouse1click)
-        return
-    end
-    -- Mobile/universal fallback: activate the held tool directly (melee swings,
-    -- most guns). mouse-button synthesis often does nothing on touch devices.
-    local ch = LocalPlayer.Character
-    local tool = ch and ch:FindFirstChildOfClass("Tool")
-    if tool then
-        pcall(function() tool:Activate() end)
-        return
-    end
-    if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
-        pcall(mouse1press)
-        task.delay(0.05, function() pcall(mouse1release) end)
-    elseif VIM then
-        pcall(function() VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0) end)
-        task.delay(0.05, function()
-            pcall(function() VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0) end)
-        end)
-    end
-end
-
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
@@ -1188,19 +1121,6 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             AIMBOT.Target = AIMBOT.Lock
             if AIMBOT.Target then
                 executeAim(AIMBOT.Target, dt)
-                if C.AutoFire then
-                    local ap, _ = getAimPart(AIMBOT.Target)
-                    if ap then
-                        local asp, aon = cam:WorldToViewportPoint(ap)
-                        if aon then
-                            local dd = math.sqrt((asp.X - anchor.X)^2 + (asp.Y - anchor.Y)^2)
-                            if dd <= C.AutoFireRange and os.clock() - lastShot >= C.AutoFireDelay then
-                                lastShot = os.clock()
-                                fireClick()
-                            end
-                        end
-                    end
-                end
             else
                 AIMBOT.TargetPart = nil
             end
