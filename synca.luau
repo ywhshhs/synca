@@ -52,6 +52,8 @@ local C = {
     StrafeRadius = 12,
     StrafeSpeed = 120,
     StrafeHeight = 0,
+    ServerPos = false,
+    ServerPosColor = Color3.fromRGB(0, 255, 0),
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -141,6 +143,25 @@ pcall(function()
     fovFill.Color = Color3.fromRGB(166, 147, 243)
     fovFill.Transparency = 0.2
     fovFill.Radius = 100
+end)
+
+-- Server-position ghost: client-only marker showing where the SERVER sees you
+-- while strafing (the orbit point). Purely visual, never replicates/collides.
+local serverMarker = nil
+pcall(function()
+    local p = Instance.new("Part")
+    p.Name = "SyncaServerPos"
+    p.Anchored = true
+    p.CanCollide = false
+    p.CanQuery = false
+    p.CanTouch = false
+    p.Transparency = 1
+    p.Material = Enum.Material.Neon
+    p.Color = Color3.fromRGB(0, 255, 0)
+    p.Size = Vector3.new(3, 5, 2)
+    p.CFrame = CFrame.new(0, -100, 0)
+    p.Parent = workspace
+    serverMarker = p
 end)
 
 -- True only when the executor really supports Drawing (dummy fallback tables
@@ -348,6 +369,12 @@ end})
 
 TargetSection:Slider({Name = "Strafe Height", Min = -5, Max = 10, Default = 0, Suffix = " studs", Decimals = 1, Flag = "StrafeHeight", Callback = function(Value)
     C.StrafeHeight = Value
+end})
+
+TargetSection:Toggle({Name = "Server Position", Flag = "ServerPos", Default = false, Callback = function(Value)
+    C.ServerPos = Value
+end}):Colorpicker({Name = "Server Color", Flag = "Server Color", Default = Color3.fromRGB(0, 255, 0), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.ServerPosColor = Value end
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
@@ -1027,6 +1054,7 @@ end
 
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
+        if serverMarker then serverMarker.Transparency = 1 end
         if not C.Strafe then savedCF = nil return end
         local t = getStrafeTarget()
         if not t then savedCF = nil return end
@@ -1041,6 +1069,11 @@ RunService.Heartbeat:Connect(function(dt)
         savedCF = hrp.CFrame
         hrp.CFrame = CFrame.lookAt(orbitPos, Vector3.new(center.X, orbitPos.Y, center.Z))
         hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        if serverMarker and C.ServerPos then
+            serverMarker.Color = C.ServerPosColor
+            serverMarker.CFrame = hrp.CFrame
+            serverMarker.Transparency = 0.5
+        end
     end)
 end)
 
