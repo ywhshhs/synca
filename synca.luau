@@ -1,4 +1,5 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/sametexe001/sametlibs/refs/heads/main/Thugsense/Library.lua"))()
+-- synca vendored build: mobile-patched Thugsense fork hosted in this repo
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ywhshhs/synca/main/Thugsense/Library.lua"))()
 
 -- Config storage (defined first so callbacks never hit nil)
 local C = {
@@ -110,7 +111,7 @@ end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.from
 end})
 
 -- FOV Size slider (fires immediately at creation, so nil-guard fovCircle)
-AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 0, Flag = "FOVSize", Callback = function(Value)
+AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 1, Flag = "FOVSize", Callback = function(Value)
     C.FOVSize = Value
     if fovCircle then
         fovCircle.Radius = Value
@@ -142,16 +143,14 @@ local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
 -- Helpers
-local function getTeam(player)
-    if not player or not player.Team then return nil end
-    return player.Team.TeamId
-end
-
+-- Team objects compare by instance. (The old code read player.Team.TeamId,
+-- which does not exist, so it compared nil == nil and treated EVERYONE as a
+-- teammate, making the aimbot target nobody.)
 local function isTeamMate(player)
     if not C.TeamCheck then return false end
     if not player or not player.Team then return false end
     if not LocalPlayer.Team then return false end
-    return getTeam(player) == getTeam(LocalPlayer)
+    return player.Team == LocalPlayer.Team
 end
 
 local function isValidTarget(player)
@@ -173,7 +172,10 @@ local function getHeadPos(player)
     return head.Position, head
 end
 
-local function canSeeTarget(targetPos)
+-- Wall check must ignore the TARGET's own body too: the old version only
+-- excluded our character, so the ray always hit the enemy's head/limbs and
+-- reported "blocked", making the aimbot target nobody.
+local function canSeeTarget(targetPos, targetPlayer)
     if not C.WallCheck then return true end
     local cam = workspace.CurrentCamera
     if not cam then return true end
@@ -182,8 +184,16 @@ local function canSeeTarget(targetPos)
     local direction = targetPos - cameraPos
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local filter = {}
     if char then
-        rayParams.FilterDescendantsInstances = {char}
+        table.insert(filter, char)
+    end
+    local targetChar = targetPlayer and targetPlayer.Character
+    if targetChar then
+        table.insert(filter, targetChar)
+    end
+    if #filter > 0 then
+        rayParams.FilterDescendantsInstances = filter
     end
     local ok, result = pcall(function()
         return workspace:Raycast(cameraPos, direction, rayParams)
@@ -215,7 +225,7 @@ local function findClosestTarget()
         local pos, part = getHeadPos(player)
         if not pos then continue end
         if not isInFOV(pos) then continue end
-        if not canSeeTarget(pos) then continue end
+        if not canSeeTarget(pos, player) then continue end
         local dist = (cam.CFrame.Position - pos).Magnitude
         if dist < closestDist then
             closestDist = dist
