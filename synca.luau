@@ -47,6 +47,9 @@ local C = {
     BoxFillColor = Color3.fromRGB(255, 255, 255),
     BoxFillOpacity = 30,
     TeamColors = false,
+    Desync = false,
+    DesyncMode = "Freeze",
+    SpinSpeed = 180,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -93,6 +96,25 @@ end)
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
+
+-- Desync ghost: client-only marker showing where the SERVER sees your body
+-- while desynced. Purely visual, never replicates or collides.
+local serverMarker = nil
+pcall(function()
+    local p = Instance.new("Part")
+    p.Name = "ItemMarker"
+    p.Anchored = true
+    p.CanCollide = false
+    p.CanQuery = false
+    p.CanTouch = false
+    p.Transparency = 1
+    p.Material = Enum.Material.Neon
+    p.Color = Color3.fromRGB(0, 255, 0)
+    p.Size = Vector3.new(3, 5, 2)
+    p.CFrame = CFrame.new(0, -100, 0)
+    p.Parent = workspace
+    serverMarker = p
+end)
 
 local Window = Library:Window({
     Name = "synca",
@@ -223,6 +245,22 @@ end})
 -- Prediction slider
 AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
     C.Prediction = Value
+end})
+
+local MiscSection = CombatTab:Section({Name = "Movement", Side = 2})
+
+-- Desync: the server replicates a frozen/spinning body while you walk freely.
+-- Freeze captures the spot on enable; Spin rotates the replicated body.
+MiscSection:Toggle({Name = "Desync", Flag = "Desync", Default = false, Callback = function(Value)
+    C.Desync = Value
+end})
+
+MiscSection:Dropdown({Name = "Desync Mode", Flag = "DesyncMode", Default = "Freeze", Items = {"Freeze", "Spin"}, Callback = function(Value)
+    C.DesyncMode = Value
+end})
+
+MiscSection:Slider({Name = "Spin Speed", Min = 10, Max = 360, Default = 180, Suffix = " deg/s", Decimals = 1, Flag = "SpinSpeed", Callback = function(Value)
+    C.SpinSpeed = Value
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
@@ -937,9 +975,68 @@ Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
 
+-- Desync engine: Heartbeat (post-physics, pre-replication) places the body
+-- where the SERVER should see it; RenderStepped (pre-render) restores your
+-- real CFrame so YOU walk freely. The displaced flag is load-bearing: a
+-- second Heartbeat before the next render must never overwrite the saved
+-- real position (that collapse strands users at the fake spot).
+local RSVC = game:GetService("RunService")
+local desyncAnchor = nil
+local desyncSaved = nil
+local desyncDisplaced = false
+local desyncLastChar = nil
+
+RSVC.Heartbeat:Connect(function(dt)
+    pcall(function()
+        if serverMarker then serverMarker.Transparency = 1 end
+        if not C.Desync then
+            desyncAnchor = nil
+            return
+        end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        -- New life = fresh desync state; never restore a corpse's position.
+        if desyncLastChar ~= char then
+            desyncLastChar = char
+            desyncAnchor = nil
+            desyncDisplaced = false
+            desyncSaved = nil
+        end
+        if C.DesyncMode == "Freeze" then
+            if not desyncAnchor then desyncAnchor = hrp.CFrame end
+            if not desyncDisplaced then
+                desyncSaved = hrp.CFrame
+                desyncDisplaced = true
+            end
+            hrp.CFrame = desyncAnchor
+        else
+            if not desyncDisplaced then
+                desyncSaved = hrp.CFrame
+                desyncDisplaced = true
+            end
+            hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(C.SpinSpeed) * (dt or 0.016), 0)
+        end
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        if serverMarker then
+            serverMarker.CFrame = hrp.CFrame
+            serverMarker.Transparency = 0.5
+        end
+    end)
+end)
+
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
+        -- Desync restore FIRST: show your real self before render. Runs even
+        -- right after toggling off, so you can never get stuck at the anchor.
+        if desyncDisplaced and desyncSaved then
+            local dchar = LocalPlayer.Character
+            local dhrp = dchar and dchar:FindFirstChild("HumanoidRootPart")
+            if dhrp then dhrp.CFrame = desyncSaved end
+            desyncDisplaced = false
+            desyncSaved = nil
+        end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local anchor = getFovCenter()
