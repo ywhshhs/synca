@@ -19,6 +19,17 @@ local C = {
     Highlight = false,
     HighlightColor = Color3.fromRGB(255, 60, 60),
     HighlightOpacity = 50,
+    ESPHighlight = false,
+    ESPHighlightColor = Color3.fromRGB(170, 140, 255),
+    ESPHighlightOpacity = 50,
+    BoxESP = false,
+    BoxColor = Color3.fromRGB(255, 255, 255),
+    HealthBar = false,
+    NameESP = false,
+    DistanceESP = false,
+    ESPTracer = false,
+    ESPTracerColor = Color3.fromRGB(255, 255, 255),
+    ESPTracerOrigin = "Bottom",
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -92,6 +103,10 @@ pcall(function()
     tracerLine.Transparency = 0.8
 end)
 
+-- True only when the executor really supports Drawing (dummy fallback tables
+-- absorb property reads as nil, so typeof check distinguishes them).
+local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
+
 local Window = Library:Window({
     Name = "Aimbot",
     FadeSpeed = 0.25
@@ -160,6 +175,17 @@ AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "He
     C.TargetPart = Value
 end})
 
+-- Target highlight: one Highlight on the whole character model (every part)
+AimbotSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
+    C.Highlight = Value
+end}):Colorpicker({Name = "Highlight Color", Flag = "Highlight Color", Default = Color3.fromRGB(255, 60, 60), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.HighlightColor = Value end
+end})
+
+AimbotSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "HighlightOpacity", Callback = function(Value)
+    C.HighlightOpacity = Value
+end})
+
 -- Smoothness slider
 AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
@@ -188,15 +214,43 @@ VisualsSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default 
     C.TracerOrigin = Value
 end})
 
--- Target highlight: one Highlight on the whole character model (every part)
-VisualsSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
-    C.Highlight = Value
-end}):Colorpicker({Name = "Highlight Color", Flag = "Highlight Color", Default = Color3.fromRGB(255, 60, 60), Callback = function(Value, Alpha)
-    if typeof(Value) == "Color3" then C.HighlightColor = Value end
+-- Full ESP suite (everyone passing the Team Check filter)
+VisualsSection:Toggle({Name = "ESP Highlight", Flag = "ESPHighlight", Default = false, Callback = function(Value)
+    C.ESPHighlight = Value
+end}):Colorpicker({Name = "ESP Color", Flag = "ESP Color", Default = Color3.fromRGB(170, 140, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.ESPHighlightColor = Value end
 end})
 
-VisualsSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "HighlightOpacity", Callback = function(Value)
-    C.HighlightOpacity = Value
+VisualsSection:Slider({Name = "ESP Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "ESPHighlightOpacity", Callback = function(Value)
+    C.ESPHighlightOpacity = Value
+end})
+
+VisualsSection:Toggle({Name = "Box ESP", Flag = "BoxESP", Default = false, Callback = function(Value)
+    C.BoxESP = Value
+end}):Colorpicker({Name = "Box Color", Flag = "Box Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.BoxColor = Value end
+end})
+
+VisualsSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
+    C.HealthBar = Value
+end})
+
+VisualsSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
+    C.NameESP = Value
+end})
+
+VisualsSection:Toggle({Name = "Distance ESP", Flag = "DistanceESP", Default = false, Callback = function(Value)
+    C.DistanceESP = Value
+end})
+
+VisualsSection:Toggle({Name = "ESP Tracer", Flag = "ESPTracer", Default = false, Callback = function(Value)
+    C.ESPTracer = Value
+end}):Colorpicker({Name = "ESP Tracer Color", Flag = "ESP Tracer Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.ESPTracerColor = Value end
+end})
+
+VisualsSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
+    C.ESPTracerOrigin = Value
 end})
 
 -- Aim Bot State
@@ -393,6 +447,222 @@ local function updateHighlight()
     end
 end
 
+-- Per-player ESP drawings + highlight, created once and reused. Drawings need
+-- the Drawing library; Highlights are plain Instances and work everywhere.
+local espCache = {}
+
+local function clearEspEntry(player)
+    local e = espCache[player]
+    if not e then return end
+    espCache[player] = nil
+    pcall(function()
+        if e.box then e.box:Remove() end
+        if e.hpBg then e.hpBg:Remove() end
+        if e.hp then e.hp:Remove() end
+        if e.text then e.text:Remove() end
+        if e.tracer then e.tracer:Remove() end
+        if e.hl then e.hl:Destroy() end
+    end)
+end
+
+local function hideEspEntry(e)
+    pcall(function()
+        if e.box then e.box.Visible = false end
+        if e.hpBg then e.hpBg.Visible = false end
+        if e.hp then e.hp.Visible = false end
+        if e.text then e.text.Visible = false end
+        if e.tracer then e.tracer.Visible = false end
+        if e.hl then e.hl.Enabled = false end
+    end)
+end
+
+local function getEspEntry(player)
+    local e = espCache[player]
+    if e then return e end
+    e = {}
+    if HAS_DRAWING then
+        pcall(function()
+            e.box = Drawing.new("Square")
+            e.box.Visible = false
+            e.box.Filled = false
+            e.box.Thickness = 1
+            e.hpBg = Drawing.new("Line")
+            e.hpBg.Visible = false
+            e.hpBg.Thickness = 4
+            e.hp = Drawing.new("Line")
+            e.hp.Visible = false
+            e.hp.Thickness = 2
+            e.text = Drawing.new("Text")
+            e.text.Visible = false
+            e.text.Size = 13
+            e.text.Center = true
+            e.text.Outline = true
+            e.tracer = Drawing.new("Line")
+            e.tracer.Visible = false
+            e.tracer.Thickness = 1
+        end)
+    end
+    espCache[player] = e
+    return e
+end
+
+-- 2D bounding box of a character model, clamped to the viewport.
+local function getCharBox(char, cam)
+    local ok, cf, size = pcall(function() return char:GetBoundingBox() end)
+    if not ok or not cf then return nil end
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local anyVisible = false
+    for _, sx in ipairs({-1, 1}) do
+        for _, sy in ipairs({-1, 1}) do
+            for _, sz in ipairs({-1, 1}) do
+                local corner = (cf * CFrame.new(size.X * sx / 2, size.Y * sy / 2, size.Z * sz / 2)).Position
+                local sp, on = cam:WorldToViewportPoint(corner)
+                if on then anyVisible = true end
+                if sp.X < minX then minX = sp.X end
+                if sp.Y < minY then minY = sp.Y end
+                if sp.X > maxX then maxX = sp.X end
+                if sp.Y > maxY then maxY = sp.Y end
+            end
+        end
+    end
+    if not anyVisible then return nil end
+    minX = math.clamp(minX, 0, cam.ViewportSize.X)
+    minY = math.clamp(minY, 0, cam.ViewportSize.Y)
+    maxX = math.clamp(maxX, 0, cam.ViewportSize.X)
+    maxY = math.clamp(maxY, 0, cam.ViewportSize.Y)
+    if maxX - minX < 2 or maxY - minY < 2 then return nil end
+    return minX, minY, maxX, maxY
+end
+
+local function espTracerOrigin(cam)
+    if C.ESPTracerOrigin == "Top" then
+        return Vector2.new(cam.ViewportSize.X / 2, 0)
+    elseif C.ESPTracerOrigin == "Cursor" then
+        local okm, mp = pcall(function() return UIS:GetMouseLocation() end)
+        if okm and mp then return Vector2.new(mp.X, mp.Y) end
+        return Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+    end
+    return Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+end
+
+local function updateESP()
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    for player, _ in pairs(espCache) do
+        if not Players:FindFirstChild(player.Name) then
+            clearEspEntry(player)
+        end
+    end
+    for _, player in ipairs(Players:GetPlayers()) do
+        local e = getEspEntry(player)
+        -- Same eligibility as aiming (respects Team Check), minus FOV/wall gates:
+        -- ESP shows everyone on screen.
+        if not isValidTarget(player) then
+            hideEspEntry(e)
+            continue
+        end
+        local char = player.Character
+        if not char then
+            hideEspEntry(e)
+            continue
+        end
+        -- ESP highlight (Instance-based, works without Drawing support)
+        if C.ESPHighlight then
+            if not e.hl or e.hlChar ~= char or e.hl.Parent ~= char then
+                if e.hl then pcall(function() e.hl:Destroy() end) end
+                e.hl, e.hlChar = nil, nil
+                local okh, hl = pcall(function()
+                    local h = Instance.new("Highlight")
+                    h.Name = "SyncaESP"
+                    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    h.Parent = char
+                    return h
+                end)
+                if okh and hl then e.hl, e.hlChar = hl, char end
+            end
+            if e.hl then
+                pcall(function()
+                    e.hl.Enabled = true
+                    e.hl.FillColor = C.ESPHighlightColor
+                    e.hl.OutlineColor = C.ESPHighlightColor
+                    e.hl.FillTransparency = 1 - (C.ESPHighlightOpacity / 100)
+                    e.hl.OutlineTransparency = 0
+                end)
+            end
+        elseif e.hl then
+            pcall(function() e.hl.Enabled = false end)
+        end
+        if not HAS_DRAWING then continue end
+        local minX, minY, maxX, maxY = getCharBox(char, cam)
+        if not minX then
+            hideEspEntry(e)
+            if e.hl then pcall(function() e.hl.Enabled = false end) end
+            continue
+        end
+        local w, h = maxX - minX, maxY - minY
+        local cx = (minX + maxX) / 2
+        if C.BoxESP and e.box then
+            e.box.Visible = true
+            e.box.Position = Vector2.new(minX, minY)
+            e.box.Size = Vector2.new(w, h)
+            e.box.Color = C.BoxColor
+        elseif e.box then
+            e.box.Visible = false
+        end
+        if C.HealthBar and e.hpBg and e.hp then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local frac = 0
+            if hum and hum.MaxHealth > 0 then
+                frac = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            end
+            local bx = minX - 5
+            e.hpBg.Visible = true
+            e.hpBg.From = Vector2.new(bx, maxY)
+            e.hpBg.To = Vector2.new(bx, minY)
+            e.hpBg.Color = Color3.fromRGB(0, 0, 0)
+            e.hp.Visible = true
+            e.hp.From = Vector2.new(bx, maxY)
+            e.hp.To = Vector2.new(bx, maxY - h * frac)
+            e.hp.Color = Color3.fromRGB(255 * (1 - frac), 255 * frac, 0)
+        else
+            if e.hpBg then e.hpBg.Visible = false end
+            if e.hp then e.hp.Visible = false end
+        end
+        if e.text then
+            local parts = {}
+            if C.NameESP then table.insert(parts, player.Name) end
+            if C.DistanceESP then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local d = math.floor((cam.CFrame.Position - hrp.Position).Magnitude)
+                    table.insert(parts, "[" .. d .. "m]")
+                end
+            end
+            if #parts > 0 then
+                e.text.Visible = true
+                e.text.Text = table.concat(parts, "  ")
+                e.text.Position = Vector2.new(cx, minY - 16)
+                e.text.Color = Color3.fromRGB(255, 255, 255)
+            else
+                e.text.Visible = false
+            end
+        end
+        if C.ESPTracer and e.tracer then
+            e.tracer.Visible = true
+            e.tracer.From = espTracerOrigin(cam)
+            e.tracer.To = Vector2.new(cx, maxY)
+            e.tracer.Color = C.ESPTracerColor
+        elseif e.tracer then
+            e.tracer.Visible = false
+        end
+    end
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    clearEspEntry(player)
+end)
+
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
@@ -434,6 +704,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         end
 
         updateHighlight()
+        updateESP()
 
         -- Enable is the master switch: nothing aims while it is off.
         -- AutoTarget only selects auto-acquire style, it never forces Enable.
