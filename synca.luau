@@ -10,6 +10,7 @@ local C = {
     FOVSize = 100,
     FOVMode = "Center",
     WallCheck = false,
+    AliveCheck = true,
     Smoothness = 10,
     PredictionEnabled = false,
     Prediction = 5,
@@ -138,6 +139,11 @@ end})
 -- Team Check toggle
 AimbotSection:Toggle({Name = "Team Check", Flag = "TeamCheck", Default = false, Callback = function(Value)
     C.TeamCheck = Value
+end})
+
+-- Alive Check toggle (skip dead players when on)
+AimbotSection:Toggle({Name = "Alive Check", Flag = "AliveCheck", Default = true, Callback = function(Value)
+    C.AliveCheck = Value
 end})
 
 -- FOV toggle + colorpicker
@@ -293,9 +299,11 @@ local function isValidTarget(player)
     if not char then return false end
     if not char:FindFirstChild("HumanoidRootPart") then return false end
     if not char:FindFirstChild("Head") then return false end
-    -- Alive check: skip the dead (Health 0 = ragdoll/despawning, not a threat)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return false end
+    -- Alive check (toggleable): skip the dead when on
+    if C.AliveCheck then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+    end
     if isTeamMate(player) then return false end
     return true
 end
