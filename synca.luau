@@ -50,6 +50,28 @@ local C = {
     Desync = false,
     DesyncMode = "Freeze",
     SpinSpeed = 180,
+    FoVColor = Color3.fromRGB(166, 147, 243),
+    LockedColor = Color3.fromRGB(255, 150, 150),
+    FOVOutline = false,
+    FoVRainbow = false,
+    RainbowSpeed = 2,
+    AimMethod = "Camera",
+    HeadDot = false,
+    HeadDotColor = Color3.fromRGB(255, 255, 255),
+    HeadDotSize = 4,
+    HealthBarPos = "Left",
+    ESPDepth = "AlwaysOnTop",
+    ESPTracerThickness = 1,
+    ESPTracerOpacity = 100,
+    BoxThickness = 1,
+    ESPTextSize = 13,
+    ESPFont = "UI",
+    SkeletonThickness = 1,
+    Crosshair = false,
+    CrossColor = Color3.fromRGB(255, 255, 255),
+    CrossSize = 12,
+    CrossGap = 6,
+    CrossDot = true,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -91,6 +113,42 @@ pcall(function()
     fovFill.Color = Color3.fromRGB(166, 147, 243)
     fovFill.Transparency = 0.2
     fovFill.Radius = 100
+end)
+
+-- FOV outline ring (dark backing behind the main ring)
+local fovOutline
+pcall(function()
+    fovOutline = Drawing.new("Circle")
+end)
+if fovOutline == nil or typeof(fovOutline) == "string" then
+    fovOutline = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+end
+pcall(function()
+    fovOutline.Visible = false
+    fovOutline.Filled = false
+    fovOutline.NumSides = 64
+    fovOutline.Color = Color3.fromRGB(0, 0, 0)
+    fovOutline.Transparency = 1
+    fovOutline.Radius = 100
+end)
+
+-- Screen-center crosshair overlay (4 lines + dot)
+local chT, chB, chL, chR, chDot = nil, nil, nil, nil, nil
+pcall(function()
+    chT = Drawing.new("Line")
+    chB = Drawing.new("Line")
+    chL = Drawing.new("Line")
+    chR = Drawing.new("Line")
+    for _, ln in ipairs({chT, chB, chL, chR}) do
+        ln.Visible = false
+        ln.Thickness = 1
+        ln.Color = Color3.fromRGB(255, 255, 255)
+    end
+    chDot = Drawing.new("Circle")
+    chDot.Visible = false
+    chDot.Filled = true
+    chDot.Radius = 2
+    chDot.Color = Color3.fromRGB(255, 255, 255)
 end)
 
 -- True only when the executor really supports Drawing (dummy fallback tables
@@ -162,9 +220,12 @@ AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = fu
         fovCircle.Visible = Value and C.Enable
     end
 end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.FoVColor = Value end
     if fovCircle and typeof(Value) == "Color3" then
         fovCircle.Color = Value
     end
+end}):Colorpicker({Name = "Locked Color", Flag = "Locked Color", Default = Color3.fromRGB(255, 150, 150), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.LockedColor = Value end
 end})
 
 -- FOV Size slider (fires immediately at creation, so nil-guard fovCircle)
@@ -193,6 +254,18 @@ AimbotSection:Slider({Name = "FoV Thickness", Min = 1, Max = 5, Default = 2, Suf
     C.FOVThickness = Value
 end})
 
+AimbotSection:Toggle({Name = "FoV Outline", Flag = "FOVOutline", Default = false, Callback = function(Value)
+    C.FOVOutline = Value
+end})
+
+AimbotSection:Toggle({Name = "FoV Rainbow", Flag = "FoVRainbow", Default = false, Callback = function(Value)
+    C.FoVRainbow = Value
+end})
+
+AimbotSection:Slider({Name = "Rainbow Speed", Min = 1, Max = 10, Default = 2, Suffix = "s", Decimals = 1, Flag = "RainbowSpeed", Callback = function(Value)
+    C.RainbowSpeed = Value
+end})
+
 -- FOV anchor: locked to screen center, or follows the cursor/touch point
 AimbotSection:Dropdown({Name = "FoV Position", Flag = "FOVMode", Default = "Center", Items = {"Center", "Cursor"}, Callback = function(Value)
     C.FOVMode = Value
@@ -211,6 +284,11 @@ end})
 -- Acquisition priority: nearest in 3D, nearest to crosshair, or weakest
 AimbotSection:Dropdown({Name = "Target Priority", Flag = "Priority", Default = "Closest", Items = {"Closest", "Cursor", "Lowest HP"}, Callback = function(Value)
     C.Priority = Value
+end})
+
+-- Aim method: write the camera, or drive the real mouse (mousemoverel)
+AimbotSection:Dropdown({Name = "Aim Method", Flag = "AimMethod", Default = "Camera", Items = {"Camera", "Mouse"}, Callback = function(Value)
+    C.AimMethod = Value
 end})
 
 -- Target highlight: one Highlight on the whole character model (every part)
@@ -274,6 +352,10 @@ ESPSection:Slider({Name = "ESP Opacity", Min = 0, Max = 100, Default = 50, Suffi
     C.ESPHighlightOpacity = Value
 end})
 
+ESPSection:Dropdown({Name = "Depth Mode", Flag = "ESPDepth", Default = "AlwaysOnTop", Items = {"AlwaysOnTop", "Occluded"}, Callback = function(Value)
+    C.ESPDepth = Value
+end})
+
 ESPSection:Toggle({Name = "Box ESP", Flag = "BoxESP", Default = false, Callback = function(Value)
     C.BoxESP = Value
 end}):Colorpicker({Name = "Box Color", Flag = "Box Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
@@ -286,6 +368,10 @@ end})
 
 ESPSection:Toggle({Name = "Box Outline", Flag = "BoxOutline", Default = false, Callback = function(Value)
     C.BoxOutline = Value
+end})
+
+ESPSection:Slider({Name = "Box Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "BoxThickness", Callback = function(Value)
+    C.BoxThickness = Value
 end})
 
 ESPSection:Toggle({Name = "Box Fill", Flag = "BoxFill", Default = false, Callback = function(Value)
@@ -304,6 +390,10 @@ end})
 
 ESPSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
     C.HealthBar = Value
+end})
+
+ESPSection:Dropdown({Name = "Bar Position", Flag = "HealthBarPos", Default = "Left", Items = {"Left", "Top", "Right", "Bottom"}, Callback = function(Value)
+    C.HealthBarPos = Value
 end})
 
 ESPSection:Toggle({Name = "Health Number", Flag = "HealthNumber", Default = false, Callback = function(Value)
@@ -328,14 +418,64 @@ ESPSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Defau
     C.ESPTracerOrigin = Value
 end})
 
+ESPSection:Slider({Name = "Tracer Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "ESPTracerThickness", Callback = function(Value)
+    C.ESPTracerThickness = Value
+end})
+
+ESPSection:Slider({Name = "Tracer Opacity", Min = 0, Max = 100, Default = 100, Suffix = "%", Decimals = 1, Flag = "ESPTracerOpacity", Callback = function(Value)
+    C.ESPTracerOpacity = Value
+end})
+
+local CrossSection = VisualsTab:Section({Name = "Crosshair", Side = 2})
+
+CrossSection:Toggle({Name = "Crosshair", Flag = "Crosshair", Default = false, Callback = function(Value)
+    C.Crosshair = Value
+end}):Colorpicker({Name = "Crosshair Color", Flag = "Crosshair Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.CrossColor = Value end
+end})
+
+CrossSection:Slider({Name = "Size", Min = 4, Max = 30, Default = 12, Suffix = "px", Decimals = 1, Flag = "CrossSize", Callback = function(Value)
+    C.CrossSize = Value
+end})
+
+CrossSection:Slider({Name = "Gap", Min = 0, Max = 20, Default = 6, Suffix = "px", Decimals = 1, Flag = "CrossGap", Callback = function(Value)
+    C.CrossGap = Value
+end})
+
+CrossSection:Toggle({Name = "Center Dot", Flag = "CrossDot", Default = true, Callback = function(Value)
+    C.CrossDot = Value
+end})
+
 ESPSection:Toggle({Name = "Skeleton ESP", Flag = "Skeleton", Default = false, Callback = function(Value)
     C.Skeleton = Value
 end}):Colorpicker({Name = "Skeleton Color", Flag = "Skeleton Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.SkeletonColor = Value end
 end})
 
+ESPSection:Slider({Name = "Skeleton Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "SkeletonThickness", Callback = function(Value)
+    C.SkeletonThickness = Value
+end})
+
 ESPSection:Slider({Name = "ESP Max Distance", Min = 0, Max = 2000, Default = 0, Suffix = " studs", Decimals = 1, Flag = "ESPMaxDistance", Callback = function(Value)
     C.ESPMaxDistance = Value
+end})
+
+ESPSection:Toggle({Name = "Head Dot", Flag = "HeadDot", Default = false, Callback = function(Value)
+    C.HeadDot = Value
+end}):Colorpicker({Name = "Dot Color", Flag = "Dot Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.HeadDotColor = Value end
+end})
+
+ESPSection:Slider({Name = "Dot Size", Min = 2, Max = 12, Default = 4, Suffix = "px", Decimals = 1, Flag = "HeadDotSize", Callback = function(Value)
+    C.HeadDotSize = Value
+end})
+
+ESPSection:Slider({Name = "Text Size", Min = 8, Max = 20, Default = 13, Suffix = "px", Decimals = 1, Flag = "ESPTextSize", Callback = function(Value)
+    C.ESPTextSize = Value
+end})
+
+ESPSection:Dropdown({Name = "Text Font", Flag = "ESPFont", Default = "UI", Items = {"UI", "System", "Plex", "Monospace"}, Callback = function(Value)
+    C.ESPFont = Value
 end})
 
 -- Aim Bot State
@@ -520,18 +660,23 @@ local function executeAim(target, dt)
     local headPos, headPart = getAimPart(target)
     if not headPos then return end
 
-    local velocity = Vector3.new(0, 0, 0)
     local char = target.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     local root = char and char:FindFirstChild("HumanoidRootPart")
-    if root and root.Velocity then
-        velocity = root.Velocity
-    end
+    local velocity = (root and root.Velocity) or Vector3.new(0, 0, 0)
 
-    -- Only lead the target when prediction is toggled on AND it is actually
-    -- moving; otherwise aim at the part directly.
+    -- Lead using movement direction (stable wish-dir, no physics noise),
+    -- falling back to velocity for knocks, flings and physics-driven motion.
+    local aimDir = nil
+    local md = hum and hum.MoveDirection
+    if md and md.Magnitude > 0.1 then
+        aimDir = md
+    elseif velocity.Magnitude > 0.5 then
+        aimDir = velocity.Unit
+    end
     local predictedPos = headPos
-    if C.PredictionEnabled and C.Prediction > 0 and velocity.Magnitude > 0.5 then
-        predictedPos = headPos + (velocity.Unit * C.Prediction)
+    if C.PredictionEnabled and C.Prediction > 0 and aimDir then
+        predictedPos = headPos + (aimDir * C.Prediction)
     end
 
     -- Humanize: slow sinusoidal wander around the aim point so the camera
@@ -552,6 +697,17 @@ local function executeAim(target, dt)
                 return
             end
         end
+    end
+
+    -- Mouse mode drives the real cursor (nothing camera-side to flag) and
+    -- falls back to camera mode where mousemoverel does not exist.
+    if C.AimMethod == "Mouse" and typeof(mousemoverel) == "function" then
+        local sp, on = cam:WorldToViewportPoint(aimPos)
+        if not on then return end
+        local anchor = getFovCenter()
+        local div = math.max(C.Smoothness, 1)
+        pcall(mousemoverel, (sp.X - anchor.X) / div, (sp.Y - anchor.Y) / div)
+        return
     end
 
     local targetCF = CFrame.lookAt(cam.CFrame.Position, aimPos)
@@ -616,6 +772,7 @@ local function clearEspEntry(player)
         if e.cn then for _, ln in ipairs(e.cn) do ln:Remove() end end
         if e.hpNum then e.hpNum:Remove() end
         if e.sk then for _, ln in ipairs(e.sk) do ln:Remove() end end
+        if e.dot then e.dot:Remove() end
         if e.hl then e.hl:Destroy() end
     end)
 end
@@ -633,6 +790,7 @@ local function hideEspEntry(e)
         if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
         if e.hpNum then e.hpNum.Visible = false end
         if e.sk then for _, ln in ipairs(e.sk) do ln.Visible = false end end
+        if e.dot then e.dot.Visible = false end
         if e.hl then e.hl.Enabled = false end
     end)
     -- Reset box smoothing so a reappearing player never slides in from stale coords
@@ -695,6 +853,10 @@ local function getEspEntry(player)
                 ln.Thickness = 1
                 e.sk[i] = ln
             end
+            e.dot = Drawing.new("Circle")
+            e.dot.Visible = false
+            e.dot.Filled = true
+            e.dot.Radius = 4
         end)
     end
     espCache[player] = e
@@ -798,6 +960,7 @@ local function updateESP(dt)
                     e.hl.OutlineColor = C.ESPHighlightColor
                     e.hl.FillTransparency = 1 - (C.ESPHighlightOpacity / 100)
                     e.hl.OutlineTransparency = 0
+                    e.hl.DepthMode = (C.ESPDepth == "Occluded") and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
                 end)
             end
         elseif e.hl then
@@ -825,6 +988,20 @@ local function updateESP(dt)
         local sx, sy, sw, sh = e.sx, e.sy, e.sw, e.sh
         local cx = sx + sw / 2
         local sbot = sy + sh
+        -- Text styling (size + typeface)
+        if e.text then e.text.Size = C.ESPTextSize end
+        if e.dist then e.dist.Size = C.ESPTextSize end
+        if e.hpNum then e.hpNum.Size = C.ESPTextSize end
+        if C.ESPFont ~= "UI" then
+            pcall(function()
+                local f = Drawing and Drawing.Fonts and Drawing.Fonts[C.ESPFont]
+                if f then
+                    if e.text then e.text.Font = f end
+                    if e.dist then e.dist.Font = f end
+                    if e.hpNum then e.hpNum.Font = f end
+                end
+            end)
+        end
         if C.BoxESP then
             if C.BoxStyle == "Corners" and e.cn then
                 if e.box then e.box.Visible = false end
@@ -843,6 +1020,7 @@ local function updateESP(dt)
                     ln.From = Vector2.new(p[1], p[2])
                     ln.To = Vector2.new(p[3], p[4])
                     ln.Color = espBoxColor(player)
+                    ln.Thickness = C.BoxThickness
                 end
             else
                 if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
@@ -859,6 +1037,7 @@ local function updateESP(dt)
                     e.box.Position = Vector2.new(sx, sy)
                     e.box.Size = Vector2.new(sw, sh)
                     e.box.Color = espBoxColor(player)
+                    e.box.Thickness = C.BoxThickness
                 end
             end
         else
@@ -881,15 +1060,29 @@ local function updateESP(dt)
             if hum and hum.MaxHealth > 0 then
                 frac = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
             end
-            local bx = sx - 5
-            e.hpBg.Visible = true
-            e.hpBg.From = Vector2.new(bx, sbot)
-            e.hpBg.To = Vector2.new(bx, sy)
-            e.hpBg.Color = Color3.fromRGB(0, 0, 0)
-            e.hp.Visible = true
-            e.hp.From = Vector2.new(bx, sbot)
-            e.hp.To = Vector2.new(bx, sbot - sh * frac)
-            e.hp.Color = Color3.fromRGB(255 * (1 - frac), 255 * frac, 0)
+            local hcol = Color3.fromRGB(255 * (1 - frac), 255 * frac, 0)
+            local side = C.HealthBarPos
+            if side == "Top" or side == "Bottom" then
+                local by = (side == "Top") and (sy - 5) or (sbot + 5)
+                e.hpBg.Visible = true
+                e.hpBg.From = Vector2.new(sx, by)
+                e.hpBg.To = Vector2.new(sx + sw, by)
+                e.hpBg.Color = Color3.fromRGB(0, 0, 0)
+                e.hp.Visible = true
+                e.hp.From = Vector2.new(sx, by)
+                e.hp.To = Vector2.new(sx + sw * frac, by)
+                e.hp.Color = hcol
+            else
+                local bx = (side == "Right") and (sx + sw + 5) or (sx - 5)
+                e.hpBg.Visible = true
+                e.hpBg.From = Vector2.new(bx, sbot)
+                e.hpBg.To = Vector2.new(bx, sy)
+                e.hpBg.Color = Color3.fromRGB(0, 0, 0)
+                e.hp.Visible = true
+                e.hp.From = Vector2.new(bx, sbot)
+                e.hp.To = Vector2.new(bx, sbot - sh * frac)
+                e.hp.Color = hcol
+            end
         else
             if e.hpBg then e.hpBg.Visible = false end
             if e.hp then e.hp.Visible = false end
@@ -936,6 +1129,8 @@ local function updateESP(dt)
             e.tracer.From = espTracerOrigin(cam)
             e.tracer.To = Vector2.new(cx, sbot)
             e.tracer.Color = C.ESPTracerColor
+            e.tracer.Thickness = C.ESPTracerThickness
+            e.tracer.Transparency = C.ESPTracerOpacity / 100
         elseif e.tracer then
             e.tracer.Visible = false
         end
@@ -958,6 +1153,7 @@ local function updateESP(dt)
                         ln.From = Vector2.new(pa.X, pa.Y)
                         ln.To = Vector2.new(pb.X, pb.Y)
                         ln.Color = C.SkeletonColor
+                        ln.Thickness = C.SkeletonThickness
                     else
                         ln.Visible = false
                     end
@@ -967,6 +1163,24 @@ local function updateESP(dt)
             end
         elseif e.sk then
             for _, ln in ipairs(e.sk) do ln.Visible = false end
+        end
+        if C.HeadDot and e.dot then
+            local hd = char:FindFirstChild("Head")
+            if hd then
+                local hp, ho = cam:WorldToViewportPoint(hd.Position)
+                if ho then
+                    e.dot.Visible = true
+                    e.dot.Position = Vector2.new(hp.X, hp.Y)
+                    e.dot.Radius = C.HeadDotSize
+                    e.dot.Color = C.HeadDotColor
+                else
+                    e.dot.Visible = false
+                end
+            else
+                e.dot.Visible = false
+            end
+        elseif e.dot then
+            e.dot.Visible = false
         end
     end
 end
@@ -1081,8 +1295,43 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovFill.Transparency = C.FOVFillOpacity / 100
 
         -- Update FOV visualization (follows the master Enable switch)
+        fovOutline.Position = anchor
+        fovOutline.Radius = C.FOVSize
+        fovOutline.Thickness = C.FOVThickness + 2
+
+        -- Update FOV visualization (follows the master Enable switch)
         fovCircle.Visible = C.FOV and C.Enable
         fovFill.Visible = C.FOV and C.FOVFilled and C.Enable
+        fovOutline.Visible = C.FOV and C.FOVOutline and C.Enable
+
+        -- Crosshair overlay at screen center
+        pcall(function()
+            local showX = C.Crosshair and chT ~= nil
+            local vpsz = cam.ViewportSize
+            local ccx, ccy = vpsz.X / 2, vpsz.Y / 2
+            local cg, cl = C.CrossGap, C.CrossSize
+            chT.Visible = showX
+            chT.From = Vector2.new(ccx, ccy - cg - cl)
+            chT.To = Vector2.new(ccx, ccy - cg)
+            chT.Color = C.CrossColor
+            chB.Visible = showX
+            chB.From = Vector2.new(ccx, ccy + cg)
+            chB.To = Vector2.new(ccx, ccy + cg + cl)
+            chB.Color = C.CrossColor
+            chL.Visible = showX
+            chL.From = Vector2.new(ccx - cg - cl, ccy)
+            chL.To = Vector2.new(ccx - cg, ccy)
+            chL.Color = C.CrossColor
+            chR.Visible = showX
+            chR.From = Vector2.new(ccx + cg, ccy)
+            chR.To = Vector2.new(ccx + cg + cl, ccy)
+            chR.Color = C.CrossColor
+            if chDot then
+                chDot.Visible = showX and C.CrossDot
+                chDot.Position = Vector2.new(ccx, ccy)
+                chDot.Color = C.CrossColor
+            end
+        end)
 
         updateHighlight()
         updateESP(dt)
@@ -1106,6 +1355,16 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             AIMBOT.Target = nil
             AIMBOT.TargetPart = nil
         end
+
+        -- Ring color: lock state beats rainbow beats picked color
+        local ringColor = C.FoVColor
+        if C.FoVRainbow then
+            ringColor = Color3.fromHSV((os.clock() % C.RainbowSpeed) / C.RainbowSpeed, 1, 1)
+        end
+        if AIMBOT.Target then
+            ringColor = C.LockedColor
+        end
+        fovCircle.Color = ringColor
     end)
 end)
 
