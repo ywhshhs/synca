@@ -1,17 +1,6 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/sametexe001/sametlibs/refs/heads/main/Thugsense/Library.lua"))()
 
-local Window = Library:Window({
-    Name = "Aimbot",
-    FadeSpeed = 0.25
-})
-
-local Watermark = Library:Watermark("Aimbot")
-local KeybindList = Library:KeybindList()
-
-local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
-local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
-
--- Config storage
+-- Config storage (defined first so callbacks never hit nil)
 local C = {
     Enable = false,
     AutoTarget = false,
@@ -22,6 +11,34 @@ local C = {
     Smoothness = 10,
     Prediction = 5,
 }
+
+-- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
+-- so fovCircle must already exist or launch throws "attempt to index nil")
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Thickness = 2
+fovCircle.Color = Color3.fromRGB(166, 147, 243)
+fovCircle.Transparency = 0.4
+fovCircle.Filled = false
+fovCircle.Radius = 100
+
+local crosshair = Drawing.new("Cross")
+crosshair.Visible = false
+crosshair.Thickness = 1
+crosshair.Color = Color3.fromRGB(166, 147, 243)
+crosshair.Size = 10
+crosshair.Transparency = 0.7
+
+local Window = Library:Window({
+    Name = "Aimbot",
+    FadeSpeed = 0.25
+})
+
+local Watermark = Library:Watermark("Aimbot")
+local KeybindList = Library:KeybindList()
+
+local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
+local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
 -- Sections
 local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
@@ -47,15 +64,21 @@ end})
 -- FOV toggle + colorpicker
 AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
     C.FOV = Value
-    fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
+    if fovCircle then
+        fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
+    end
 end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
-    fovCircle.Color = Value
+    if fovCircle and typeof(Value) == "Color3" then
+        fovCircle.Color = Value
+    end
 end})
 
--- FOV Size slider
+-- FOV Size slider (fires immediately at creation, so nil-guard fovCircle)
 AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 0, Flag = "FOVSize", Callback = function(Value)
     C.FOVSize = Value
-    fovCircle.Radius = Value
+    if fovCircle then
+        fovCircle.Radius = Value
+    end
 end})
 
 -- Wall Check toggle
@@ -73,27 +96,14 @@ AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suf
     C.Prediction = Value
 end})
 
--- Drawing objects for FOV visualization
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Thickness = 2
-fovCircle.Color = Color3.fromRGB(166, 147, 243)
-fovCircle.Transparency = 0.4
-fovCircle.Filled = false
-fovCircle.Radius = 100
-
-local crosshair = Drawing.new("Cross")
-crosshair.Visible = false
-crosshair.Thickness = 1
-crosshair.Color = Color3.fromRGB(166, 147, 243)
-crosshair.Size = 10
-crosshair.Transparency = 0.7
-
 -- Aim Bot State
 local AIMBOT = {
     Target = nil,
     TargetPart = nil,
 }
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
 -- Helpers
 local function getTeam(player)
@@ -104,21 +114,22 @@ end
 local function isTeamMate(player)
     if not C.TeamCheck then return false end
     if not player or not player.Team then return false end
-    if not game.Players.LocalPlayer.Team then return false end
-    return getTeam(player) == getTeam(game.Players.LocalPlayer)
+    if not LocalPlayer.Team then return false end
+    return getTeam(player) == getTeam(LocalPlayer)
 end
 
 local function isValidTarget(player)
     if not player then return false end
-    if player == game.Players.LocalPlayer then return false end
+    if player == LocalPlayer then return false end
     local char = player.Character
     if not char then return false end
     if not char:FindFirstChild("HumanoidRootPart") then return false end
+    if not char:FindFirstChild("Head") then return false end
     if isTeamMate(player) then return false end
     return true
 end
 
-local function getHeadInfo(player)
+local function getHeadPos(player)
     local char = player.Character
     if not char then return nil, nil end
     local head = char:FindFirstChild("Head")
@@ -128,36 +139,48 @@ end
 
 local function canSeeTarget(targetPos)
     if not C.WallCheck then return true end
-    local cameraPos = workspace.CurrentCamera.CFrame.Position
+    local cam = workspace.CurrentCamera
+    if not cam then return true end
+    local char = LocalPlayer.Character
+    local cameraPos = cam.CFrame.Position
     local direction = targetPos - cameraPos
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
-    local result = workspace:Raycast(cameraPos, direction, rayParams)
+    if char then
+        rayParams.FilterDescendantsInstances = {char}
+    end
+    local ok, result = pcall(function()
+        return workspace:Raycast(cameraPos, direction, rayParams)
+    end)
+    if not ok then return true end
     if result then return false end
     return true
 end
 
 local function isInFOV(targetPos)
     if not C.FOV then return true end
-    local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(targetPos)
+    local cam = workspace.CurrentCamera
+    if not cam then return false end
+    local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
     if not onScreen then return false end
-    local centerX = workspace.CurrentCamera.ViewportSize.X / 2
-    local centerY = workspace.CurrentCamera.ViewportSize.Y / 2
+    local centerX = cam.ViewportSize.X / 2
+    local centerY = cam.ViewportSize.Y / 2
     local distance = math.sqrt((screenPos.X - centerX)^2 + (screenPos.Y - centerY)^2)
     return distance <= C.FOVSize
 end
 
 local function findClosestTarget()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
     local closest = nil
     local closestDist = math.huge
-    for _, player in pairs(game.Players:GetPlayers()) do
+    for _, player in pairs(Players:GetPlayers()) do
         if not isValidTarget(player) then continue end
-        local pos, part = getHeadInfo(player)
+        local pos, part = getHeadPos(player)
         if not pos then continue end
         if not isInFOV(pos) then continue end
         if not canSeeTarget(pos) then continue end
-        local dist = (workspace.CurrentCamera.CFrame.Position - pos).Magnitude
+        local dist = (cam.CFrame.Position - pos).Magnitude
         if dist < closestDist then
             closestDist = dist
             closest = player
@@ -168,66 +191,79 @@ local function findClosestTarget()
 end
 
 local function executeAim(target)
-    local headPos, headPart = getHeadInfo(target)
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local headPos, headPart = getHeadPos(target)
     if not headPos then return end
 
     local velocity = Vector3.new(0, 0, 0)
-    local root = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    local char = target.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
     if root and root.Velocity then
         velocity = root.Velocity
     end
 
-    local lookDir = velocity.Magnitude > 0 and velocity.Unit or workspace.CurrentCamera.CFrame.LookVector
+    local lookDir = velocity.Magnitude > 0 and velocity.Unit or cam.CFrame.LookVector
     local predictedPos = headPos + (lookDir * C.Prediction)
 
-    local targetCF = CFrame.lookAt(workspace.CurrentCamera.CFrame.Position, predictedPos)
+    local targetCF = CFrame.lookAt(cam.CFrame.Position, predictedPos)
 
     if C.Smoothness > 0 then
         local alpha = math.clamp(C.Smoothness * 0.016, 0, 0.15)
-        workspace.CurrentCamera.CFrame = workspace.CurrentCamera.CFrame:Lerp(targetCF, alpha)
+        cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
     else
-        workspace.CurrentCamera.CFrame = targetCF
+        cam.CFrame = targetCF
     end
 end
 
--- Main render loop
+-- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
-    local screenCenter = workspace.CurrentCamera.ViewportSize / 2
-    fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
-    fovCircle.Radius = C.FOVSize
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local screenCenter = cam.ViewportSize / 2
+        fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
+        fovCircle.Radius = C.FOVSize
+        crosshair.Position = Vector2.new(screenCenter.X, screenCenter.Y)
 
-    -- Update FOV visualization
-    fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
-    crosshair.Visible = C.Enable or C.AutoTarget
+        -- Update FOV visualization
+        fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
+        crosshair.Visible = C.Enable or C.AutoTarget
 
-    -- AutoTarget mode (mobile)
-    if C.AutoTarget then
-        local target = findClosestTarget()
-        if target then
-            AIMBOT.Target = target
-            AIMBOT.TargetPart = getHeadInfo(target)[2]
-            C.Enable = true
-            executeAim(target)
+        -- AutoTarget mode (mobile)
+        if C.AutoTarget then
+            local target = findClosestTarget()
+            if target then
+                AIMBOT.Target = target
+                local _, part = getHeadPos(target)
+                AIMBOT.TargetPart = part
+                C.Enable = true
+                executeAim(target)
+            else
+                AIMBOT.Target = nil
+                AIMBOT.TargetPart = nil
+                C.Enable = false
+            end
+        elseif C.Enable then
+            -- Manual mode
+            local target = findClosestTarget()
+            if target then
+                AIMBOT.Target = target
+                local _, part = getHeadPos(target)
+                AIMBOT.TargetPart = part
+                executeAim(target)
+            else
+                AIMBOT.Target = nil
+                AIMBOT.TargetPart = nil
+            end
         else
             AIMBOT.Target = nil
             AIMBOT.TargetPart = nil
-            C.Enable = false
         end
-    elseif C.Enable then
-        -- Manual mode
-        local target = findClosestTarget()
-        if target then
-            AIMBOT.Target = target
-            AIMBOT.TargetPart = getHeadInfo(target)[2]
-            executeAim(target)
-        else
-            AIMBOT.Target = nil
-            AIMBOT.TargetPart = nil
-        end
-    end
+    end)
 end)
 
--- Init library
+-- Init library (loads autoload config)
 Library:Init()
 
 -- Load notification
