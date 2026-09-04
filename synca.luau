@@ -46,6 +46,12 @@ local C = {
     Skeleton = false,
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     ESPMaxDistance = 0,
+    TargetOnly = false,
+    TargetPlayer = "",
+    Strafe = false,
+    StrafeRadius = 12,
+    StrafeSpeed = 120,
+    StrafeHeight = 0,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -289,6 +295,61 @@ TargetSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default =
     C.TracerOrigin = Value
 end})
 
+-- Target menu: lock onto ONE player, ignore everyone else
+TargetSection:Toggle({Name = "Target Only", Flag = "TargetOnly", Default = false, Callback = function(Value)
+    C.TargetOnly = Value
+end})
+
+local function playerNames()
+    local Svc = game:GetService("Players")
+    local lp = Svc.LocalPlayer
+    local names = {}
+    for _, p in ipairs(Svc:GetPlayers()) do
+        if p ~= lp then table.insert(names, p.Name) end
+    end
+    table.sort(names)
+    return names
+end
+
+local targetList = TargetSection:Listbox({Name = "Target", Flag = "SelectedTarget", Items = playerNames(), Size = 120, Callback = function(Value)
+    C.TargetPlayer = (type(Value) == "table" and Value[1]) or Value or ""
+end})
+
+TargetSection:Button({Name = "Refresh Targets", Callback = function()
+    local names = playerNames()
+    pcall(function() targetList:Refresh(names) end)
+    if C.TargetPlayer ~= "" and not table.find(names, C.TargetPlayer) then
+        C.TargetPlayer = ""
+    end
+end})
+
+game:GetService("Players").PlayerAdded:Connect(function()
+    pcall(function() targetList:Refresh(playerNames()) end)
+end)
+
+game:GetService("Players").PlayerRemoving:Connect(function(p)
+    pcall(function() targetList:Refresh(playerNames()) end)
+    if C.TargetPlayer == p.Name then C.TargetPlayer = "" end
+end)
+
+-- C-sync strafe: orbit the selected/locked target on the server while you
+-- keep walking freely on your screen. Pair with Target Only + Auto Fire.
+TargetSection:Toggle({Name = "Strafe Target", Flag = "Strafe", Default = false, Callback = function(Value)
+    C.Strafe = Value
+end})
+
+TargetSection:Slider({Name = "Strafe Radius", Min = 5, Max = 30, Default = 12, Suffix = " studs", Decimals = 1, Flag = "StrafeRadius", Callback = function(Value)
+    C.StrafeRadius = Value
+end})
+
+TargetSection:Slider({Name = "Strafe Speed", Min = 10, Max = 360, Default = 120, Suffix = " deg/s", Decimals = 1, Flag = "StrafeSpeed", Callback = function(Value)
+    C.StrafeSpeed = Value
+end})
+
+TargetSection:Slider({Name = "Strafe Height", Min = -5, Max = 10, Default = 0, Suffix = " studs", Decimals = 1, Flag = "StrafeHeight", Callback = function(Value)
+    C.StrafeHeight = Value
+end})
+
 -- Full ESP suite (everyone passing the Team Check filter)
 ESPSection:Toggle({Name = "ESP Highlight", Flag = "ESPHighlight", Default = false, Callback = function(Value)
     C.ESPHighlight = Value
@@ -472,6 +533,18 @@ end
 local function findClosestTarget()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
+    -- Target Only: ignore everyone except the selected listbox player
+    if C.TargetOnly then
+        if C.TargetPlayer == "" then return nil end
+        local only = Players:FindFirstChild(C.TargetPlayer)
+        if not only or not isValidTarget(only) then return nil end
+        local opos, opart = getAimPart(only)
+        if not opos then return nil end
+        if not isInFOV(opos) then return nil end
+        if not canSeeTarget(opos, only) then return nil end
+        AIMBOT.TargetPart = opart
+        return only
+    end
     local closest = nil
     local closestDist = math.huge
     for _, player in pairs(Players:GetPlayers()) do
@@ -495,6 +568,7 @@ end
 local function isLockValid(target)
     if not target then return false end
     if not isValidTarget(target) then return false end
+    if C.TargetOnly and (C.TargetPlayer == "" or target.Name ~= C.TargetPlayer) then return false end
     local cam = workspace.CurrentCamera
     if not cam then return false end
     local pos, _ = getAimPart(target)
@@ -931,6 +1005,45 @@ Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
 
+-- C-sync strafe engine: on Heartbeat (post-physics, pre-replication) teleport
+-- to the orbit point so the SERVER replicates you circling the target; on
+-- RenderStepped (pre-render) restore your real CFrame so YOU keep walking
+-- freely on your screen. Works where the client owns character physics.
+local RunService = game:GetService("RunService")
+local strafeAngle = 0
+local savedCF = nil
+
+local function getStrafeTarget()
+    if not C.Strafe then return nil end
+    local p = nil
+    if C.TargetPlayer ~= "" then
+        p = Players:FindFirstChild(C.TargetPlayer)
+    else
+        p = AIMBOT.Target
+    end
+    if not p or not isValidTarget(p) then return nil end
+    return p
+end
+
+RunService.Heartbeat:Connect(function(dt)
+    pcall(function()
+        if not C.Strafe then savedCF = nil return end
+        local t = getStrafeTarget()
+        if not t then savedCF = nil return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local thc = t.Character
+        local thrp = thc and thc:FindFirstChild("HumanoidRootPart")
+        if not hrp or not thrp then savedCF = nil return end
+        strafeAngle += math.rad(C.StrafeSpeed) * (dt or 0.016)
+        local center = thrp.Position + Vector3.new(0, C.StrafeHeight, 0)
+        local orbitPos = center + Vector3.new(math.cos(strafeAngle) * C.StrafeRadius, 0, math.sin(strafeAngle) * C.StrafeRadius)
+        savedCF = hrp.CFrame
+        hrp.CFrame = CFrame.lookAt(orbitPos, Vector3.new(center.X, orbitPos.Y, center.Z))
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    end)
+end)
+
 -- Auto Fire click: executor click first, VirtualInputManager fallback.
 -- Non-blocking (release is deferred) so the render loop never yields.
 local lastShot = 0
@@ -953,6 +1066,12 @@ end
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
+        -- C-sync restore FIRST: show yourself walking freely before render
+        if savedCF then
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then hrp.CFrame = savedCF end
+        end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local anchor = getFovCenter()
