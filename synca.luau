@@ -975,18 +975,21 @@ Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
 
--- Desync engine: Heartbeat (post-physics, pre-replication) places the body
--- where the SERVER should see it; RenderStepped (pre-render) restores your
--- real CFrame so YOU walk freely. The displaced flag is load-bearing: a
--- second Heartbeat before the next render must never overwrite the saved
--- real position (that collapse strands users at the fake spot).
+-- Desync engine (offset-desync pattern, same family as Nameless Admin's): the
+-- anchor is placed on PostSimulation AND Heartbeat (post-physics,
+-- pre-replication) so the replicated packet carries the SERVER-side CFrame;
+-- RenderStepped (pre-render) restores your real CFrame so YOU walk freely.
+-- Freeze = server sees you standing where you enabled it. Spin = server
+-- sees you rotating in place. Real position is tracked eps-gated and reset
+-- per life; the displaced flag stops a hitch from collapsing the desync.
 local RSVC = game:GetService("RunService")
 local desyncAnchor = nil
 local desyncSaved = nil
 local desyncDisplaced = false
 local desyncLastChar = nil
+local DESYNC_EPS = 0.05
 
-RSVC.Heartbeat:Connect(function(dt)
+local function desyncPlaceAnchor(dt)
     pcall(function()
         if serverMarker then serverMarker.Transparency = 1 end
         if not C.Desync then
@@ -1003,18 +1006,18 @@ RSVC.Heartbeat:Connect(function(dt)
             desyncDisplaced = false
             desyncSaved = nil
         end
+        -- Track the real position, but only when it actually moved: physics
+        -- jitter must not pollute the restore target.
+        if not desyncDisplaced then
+            desyncSaved = hrp.CFrame
+            desyncDisplaced = true
+        elseif desyncSaved and (hrp.CFrame.Position - desyncSaved.Position).Magnitude > DESYNC_EPS then
+            desyncSaved = hrp.CFrame
+        end
         if C.DesyncMode == "Freeze" then
             if not desyncAnchor then desyncAnchor = hrp.CFrame end
-            if not desyncDisplaced then
-                desyncSaved = hrp.CFrame
-                desyncDisplaced = true
-            end
             hrp.CFrame = desyncAnchor
         else
-            if not desyncDisplaced then
-                desyncSaved = hrp.CFrame
-                desyncDisplaced = true
-            end
             hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(C.SpinSpeed) * (dt or 0.016), 0)
         end
         hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -1023,6 +1026,15 @@ RSVC.Heartbeat:Connect(function(dt)
             serverMarker.Transparency = 0.5
         end
     end)
+end
+
+pcall(function()
+    RSVC.PostSimulation:Connect(function(dt)
+        desyncPlaceAnchor(dt)
+    end)
+end)
+RSVC.Heartbeat:Connect(function(dt)
+    desyncPlaceAnchor(dt)
 end)
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
