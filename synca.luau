@@ -130,7 +130,7 @@ AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, 
 end})
 
 -- Smoothness slider
-AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 30, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
+AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
 end})
 
@@ -277,12 +277,9 @@ local function executeAim(target)
 
     local targetCF = CFrame.lookAt(cam.CFrame.Position, predictedPos)
 
-    if C.Smoothness > 0 then
-        local alpha = math.clamp(C.Smoothness * 0.016, 0, 0.15)
-        cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
-    else
-        cam.CFrame = targetCF
-    end
+    -- Higher smoothness = slower glide, 1 = instant snap.
+    local alpha = math.clamp(1 / math.max(C.Smoothness, 1), 0, 1)
+    cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
 end
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
