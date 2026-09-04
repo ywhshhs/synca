@@ -53,6 +53,24 @@ local C = {
     Desync = false,
     DesyncMode = "Freeze",
     SpinSpeed = 180,
+    Resolver = false,
+    ResolverRate = 60,
+    PredictionVertical = 0.13,
+    SmoothnessVertical = 10,
+    AirOffset = false,
+    AirOffsetAmount = 2,
+    RetargetDelay = 0,
+    TargetDot = false,
+    TargetDotSize = 6,
+    TargetDotFilled = true,
+    OrbitDistance = 12,
+    SpoofVelocity = false,
+    SpoofType = "Prediction Breaker",
+    SpoofStrength = 500,
+    FakeLag = false,
+    FakeLagInterval = 0.2,
+    VelDesync = false,
+    VelDesyncRange = 2,
     FoVColor = Color3.fromRGB(166, 147, 243),
     LockedColor = Color3.fromRGB(255, 150, 150),
     FOVOutline = false,
@@ -152,6 +170,21 @@ pcall(function()
     chDot.Filled = true
     chDot.Radius = 2
     chDot.Color = Color3.fromRGB(255, 255, 255)
+end)
+
+-- Target Dot ring on the locked aim point
+local lockDot
+pcall(function()
+    lockDot = Drawing.new("Circle")
+end)
+if lockDot == nil or typeof(lockDot) == "string" then
+    lockDot = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+end
+pcall(function()
+    lockDot.Visible = false
+    lockDot.Filled = false
+    lockDot.Radius = 6
+    lockDot.Color = Color3.fromRGB(255, 150, 150)
 end)
 
 -- True only when the executor really supports Drawing (dummy fallback tables
@@ -308,6 +341,19 @@ AimbotSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 
     C.HighlightOpacity = Value
 end})
 
+-- Target Dot: ring on the locked aim point itself
+AimbotSection:Toggle({Name = "Target Dot", Flag = "TargetDot", Default = false, Callback = function(Value)
+    C.TargetDot = Value
+end})
+
+AimbotSection:Slider({Name = "Dot Size", Min = 2, Max = 12, Default = 6, Suffix = "px", Decimals = 1, Flag = "TargetDotSize", Callback = function(Value)
+    C.TargetDotSize = Value
+end})
+
+AimbotSection:Toggle({Name = "Dot Filled", Flag = "TargetDotFilled", Default = true, Callback = function(Value)
+    C.TargetDotFilled = Value
+end})
+
 -- Smoothness slider
 AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
@@ -344,6 +390,40 @@ AdvancedSection:Toggle({Name = "Require Lock", Flag = "TriggerLock", Default = t
     C.TriggerLock = Value
 end})
 
+-- Vertical prediction (time-factor on Y velocity, Azure-style)
+AdvancedSection:Slider({Name = "Vertical Prediction", Min = 0, Max = 1, Default = 0.13, Suffix = "s", Decimals = 2, Flag = "PredictionVertical", Callback = function(Value)
+    C.PredictionVertical = Value
+end})
+
+-- Resolver: differentiate real velocity from position history (beats
+-- velocity spoofing), refreshed at the set rate while locked
+AdvancedSection:Toggle({Name = "Resolver", Flag = "Resolver", Default = false, Callback = function(Value)
+    C.Resolver = Value
+end})
+
+AdvancedSection:Slider({Name = "Resolver Rate", Min = 1, Max = 200, Default = 60, Suffix = "hz", Decimals = 1, Flag = "ResolverRate", Callback = function(Value)
+    C.ResolverRate = Value
+end})
+
+-- Air Offset: extra lift when the target is airborne (Freefall)
+AdvancedSection:Toggle({Name = "Air Offset", Flag = "AirOffset", Default = false, Callback = function(Value)
+    C.AirOffset = Value
+end})
+
+AdvancedSection:Slider({Name = "Air Offset Amount", Min = -10, Max = 10, Default = 2, Suffix = " studs", Decimals = 1, Flag = "AirOffsetAmount", Callback = function(Value)
+    C.AirOffsetAmount = Value
+end})
+
+-- Re-target Delay: cooldown after a lock drops before acquiring again
+AdvancedSection:Slider({Name = "Re-target Delay", Min = 0, Max = 2, Default = 0, Suffix = "s", Decimals = 2, Flag = "RetargetDelay", Callback = function(Value)
+    C.RetargetDelay = Value
+end})
+
+-- Vertical smoothing (mouse aim mode only)
+AdvancedSection:Slider({Name = "Vertical Smoothing", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "SmoothnessVertical", Callback = function(Value)
+    C.SmoothnessVertical = Value
+end})
+
 local MiscSection = CombatTab:Section({Name = "Movement", Side = 2})
 
 -- Desync: the server replicates a frozen/spinning body while you walk freely.
@@ -352,12 +432,47 @@ MiscSection:Toggle({Name = "Desync", Flag = "Desync", Default = false, Callback 
     C.Desync = Value
 end})
 
-MiscSection:Dropdown({Name = "Desync Mode", Flag = "DesyncMode", Default = "Freeze", Items = {"Freeze", "Spin"}, Callback = function(Value)
+MiscSection:Dropdown({Name = "Desync Mode", Flag = "DesyncMode", Default = "Freeze", Items = {"Freeze", "Spin", "Local Strafe"}, Callback = function(Value)
     C.DesyncMode = Value
 end})
 
 MiscSection:Slider({Name = "Spin Speed", Min = 10, Max = 360, Default = 180, Suffix = " deg/s", Decimals = 1, Flag = "SpinSpeed", Callback = function(Value)
     C.SpinSpeed = Value
+end})
+
+MiscSection:Slider({Name = "Orbit Distance", Min = 5, Max = 30, Default = 12, Suffix = " studs", Decimals = 1, Flag = "OrbitDistance", Callback = function(Value)
+    C.OrbitDistance = Value
+end})
+
+-- Velocity Spoof: what the server sees for your velocity (masking)
+MiscSection:Toggle({Name = "Velocity Spoof", Flag = "SpoofVelocity", Default = false, Callback = function(Value)
+    C.SpoofVelocity = Value
+end})
+
+MiscSection:Dropdown({Name = "Spoof Type", Flag = "SpoofType", Default = "Prediction Breaker", Items = {"Prediction Breaker", "Underground", "Sky"}, Callback = function(Value)
+    C.SpoofType = Value
+end})
+
+MiscSection:Slider({Name = "Spoof Strength", Min = 50, Max = 2000, Default = 500, Suffix = " vel", Decimals = 1, Flag = "SpoofStrength", Callback = function(Value)
+    C.SpoofStrength = Value
+end})
+
+-- Fake Lag: chop replication via NetworkIsSleeping (executor-gated)
+MiscSection:Toggle({Name = "Fake Lag", Flag = "FakeLag", Default = false, Callback = function(Value)
+    C.FakeLag = Value
+end})
+
+MiscSection:Slider({Name = "Lag Interval", Min = 0.05, Max = 1, Default = 0.2, Suffix = "s", Decimals = 2, Flag = "FakeLagInterval", Callback = function(Value)
+    C.FakeLagInterval = Value
+end})
+
+-- Velocity Desync: randomize replicated velocity each tick, then restore
+MiscSection:Toggle({Name = "Velocity Desync", Flag = "VelDesync", Default = false, Callback = function(Value)
+    C.VelDesync = Value
+end})
+
+MiscSection:Slider({Name = "Desync Range", Min = 1, Max = 10, Default = 2, Suffix = "k", Decimals = 1, Flag = "VelDesyncRange", Callback = function(Value)
+    C.VelDesyncRange = Value
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
@@ -674,6 +789,12 @@ local function isLockValid(target)
     return true
 end
 
+-- Resolver state: true velocity differentiated from position history.
+local resolverPos = Vector3.new(0, 0, 0)
+local resolverTick = 0
+local resolverVel = Vector3.new(0, 0, 0)
+local lockDroppedAt = nil
+
 local function executeAim(target, dt)
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -687,16 +808,50 @@ local function executeAim(target, dt)
 
     -- Lead using movement direction (stable wish-dir, no physics noise),
     -- falling back to velocity for knocks, flings and physics-driven motion.
+    -- Resolver: differentiate true velocity from position history while this
+    -- target is held (immune to velocity spoofing), sampled at set rate.
+    if C.Resolver and root then
+        local now = os.clock()
+        if resolverTick == 0 or (now - resolverTick) >= (1 / math.max(C.ResolverRate, 1)) then
+            local dtR = now - resolverTick
+            if dtR > 0 and resolverTick > 0 then
+                resolverVel = (root.Position - resolverPos) / dtR
+            end
+            resolverTick, resolverPos = now, root.Position
+        end
+    else
+        resolverTick = 0
+    end
+
+    -- Lead source priority: resolver > movement direction > raw velocity.
+    -- Horizontal in studs along the direction, vertical as time on Y.
     local aimDir = nil
-    local md = hum and hum.MoveDirection
-    if md and md.Magnitude > 0.1 then
-        aimDir = md
-    elseif velocity.Magnitude > 0.5 then
-        aimDir = velocity.Unit
+    if C.Resolver and resolverTick > 0 and resolverVel.Magnitude > 0.5 then
+        aimDir = resolverVel.Unit
+    else
+        local md = hum and hum.MoveDirection
+        if md and md.Magnitude > 0.1 then
+            aimDir = md
+        elseif velocity.Magnitude > 0.5 then
+            aimDir = velocity.Unit
+        end
     end
     local predictedPos = headPos
     if C.PredictionEnabled and C.Prediction > 0 and aimDir then
-        predictedPos = headPos + (aimDir * C.Prediction)
+        local hDir = Vector3.new(aimDir.X, 0, aimDir.Z)
+        if hDir.Magnitude > 0.05 then
+            predictedPos += hDir.Unit * C.Prediction
+        end
+        local vy = (C.Resolver and resolverTick > 0) and resolverVel.Y or velocity.Y
+        predictedPos += Vector3.new(0, vy * C.PredictionVertical, 0)
+    end
+
+    -- Air Offset: extra lift while the target is airborne (Freefall).
+    if C.AirOffset and hum then
+        local okS, st = pcall(function() return hum:GetState() end)
+        if okS and st == Enum.HumanoidStateType.Freefall then
+            predictedPos += Vector3.new(0, C.AirOffsetAmount, 0)
+        end
     end
 
     -- Humanize: slow sinusoidal wander around the aim point so the camera
@@ -725,8 +880,9 @@ local function executeAim(target, dt)
         local sp, on = cam:WorldToViewportPoint(aimPos)
         if not on then return end
         local anchor = getFovCenter()
-        local div = math.max(C.Smoothness, 1)
-        pcall(mousemoverel, (sp.X - anchor.X) / div, (sp.Y - anchor.Y) / div)
+        local divH = math.max(C.Smoothness, 1)
+        local divV = math.max(C.SmoothnessVertical, 1)
+        pcall(mousemoverel, (sp.X - anchor.X) / divH, (sp.Y - anchor.Y) / divV)
         return
     end
 
@@ -1225,6 +1381,7 @@ local desyncDisplaced = false
 local desyncLastChar = nil
 local desyncLastMode = nil
 local DESYNC_EPS = 0.05
+local orbitAngle = 0
 
 -- True when the body is sitting exactly where WE put it (as opposed to a
 -- genuine new position from walking/physics). Position-eps plus facing-dot
@@ -1270,8 +1427,13 @@ local function desyncPlaceAnchor(dt)
             -- Pin the server body: without this it drifts off-anchor between
             -- placements. Spin skips it (better local feel, tracks anyway).
             hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        else
+        elseif C.DesyncMode == "Spin" then
             hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(C.SpinSpeed) * (dt or 0.016), 0)
+        else -- Local Strafe: server orbits your own real spot, you see normal
+            local base = (desyncSaved or hrp.CFrame).Position
+            orbitAngle += math.rad(C.SpinSpeed) * (dt or 0.016)
+            local oPos = base + Vector3.new(math.cos(orbitAngle) * C.OrbitDistance, 0, math.sin(orbitAngle) * C.OrbitDistance)
+            hrp.CFrame = CFrame.lookAt(oPos, Vector3.new(base.X, oPos.Y, base.Z))
         end
         desyncPlaced = hrp.CFrame
         if serverMarker then
@@ -1317,6 +1479,78 @@ local function resolveTriggerTarget()
     if C.TriggerLock and AIMBOT.Target ~= player then return nil end
     return player
 end
+
+-- Velocity Spoof: what the server sees for your velocity (masking).
+-- Restored every tick so your client never feels it.
+task.spawn(function()
+    while true do
+        if C.SpoofVelocity then
+            local ch = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                pcall(function()
+                    local v = hrp.Velocity
+                    if C.SpoofType == "Underground" then
+                        hrp.Velocity = v + Vector3.new(0, -C.SpoofStrength, 0)
+                    elseif C.SpoofType == "Sky" then
+                        hrp.Velocity = v + Vector3.new(0, C.SpoofStrength, 0)
+                    else
+                        hrp.Velocity = Vector3.new(0, 0, 0)
+                    end
+                    RSVC.RenderStepped:Wait()
+                    hrp.Velocity = v
+                end)
+            end
+        else
+            task.wait(0.05)
+        end
+    end
+end)
+
+-- Fake Lag: chop replication by sleeping network ownership on an interval.
+-- Executor-gated (sethiddenproperty); refuses silently where missing.
+task.spawn(function()
+    local sleeping, lastFlip = false, 0
+    while true do
+        if C.FakeLag and typeof(sethiddenproperty) == "function" then
+            local ch = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp and os.clock() - lastFlip >= C.FakeLagInterval then
+                lastFlip = os.clock()
+                sleeping = not sleeping
+                pcall(sethiddenproperty, hrp, "NetworkIsSleeping", sleeping)
+            end
+        elseif sleeping then
+            sleeping = false
+            local ch = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp then pcall(sethiddenproperty, hrp, "NetworkIsSleeping", false) end
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- Velocity Desync: randomize replicated velocity each tick, then restore.
+-- Breaks enemy prediction against you.
+task.spawn(function()
+    while true do
+        if C.VelDesync then
+            local ch = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                pcall(function()
+                    local v = hrp.Velocity
+                    local a = math.floor(C.VelDesyncRange * 1000)
+                    hrp.Velocity = Vector3.new(math.random(-a, a), math.random(-a, a), math.random(-a, a))
+                    RSVC.RenderStepped:Wait()
+                    hrp.Velocity = v
+                end)
+            end
+        else
+            task.wait(0.05)
+        end
+    end
+end)
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
@@ -1390,7 +1624,18 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         -- target dies, hides, or leaves the FOV/screen — look away to release.
         if C.Enable then
             if not isLockValid(AIMBOT.Lock) then
-                AIMBOT.Lock = findClosestTarget()
+                AIMBOT.Lock = nil
+                if C.RetargetDelay > 0 then
+                    if lockDroppedAt == nil then lockDroppedAt = os.clock() end
+                    if os.clock() - lockDroppedAt >= C.RetargetDelay then
+                        AIMBOT.Lock = findClosestTarget()
+                        lockDroppedAt = nil
+                    end
+                else
+                    AIMBOT.Lock = findClosestTarget()
+                end
+            else
+                lockDroppedAt = nil
             end
             AIMBOT.Target = AIMBOT.Lock
             if AIMBOT.Target then
@@ -1402,6 +1647,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             AIMBOT.Lock = nil
             AIMBOT.Target = nil
             AIMBOT.TargetPart = nil
+            lockDroppedAt = nil
         end
 
         -- Ring color: lock state beats rainbow beats picked color
@@ -1413,6 +1659,27 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             ringColor = C.LockedColor
         end
         fovCircle.Color = ringColor
+
+        -- Target Dot on the locked aim point
+        if C.TargetDot and AIMBOT.Target then
+            local dp, _ = getAimPart(AIMBOT.Target)
+            if dp then
+                local dsp, dson = cam:WorldToViewportPoint(dp)
+                if dson and lockDot then
+                    lockDot.Visible = true
+                    lockDot.Position = Vector2.new(dsp.X, dsp.Y)
+                    lockDot.Radius = C.TargetDotSize
+                    lockDot.Filled = C.TargetDotFilled
+                    lockDot.Color = C.LockedColor
+                elseif lockDot then
+                    lockDot.Visible = false
+                end
+            elseif lockDot then
+                lockDot.Visible = false
+            end
+        elseif lockDot then
+            lockDot.Visible = false
+        end
 
         -- Triggerbot: arm while the cursor rests on a valid enemy, fire once
         -- the delay elapses. Re-arms per shot; gated on the master switch.
