@@ -216,18 +216,21 @@ AimbotSection:Toggle({Name = "Alive Check", Flag = "AliveCheck", Default = true,
     C.AliveCheck = Value
 end})
 
--- FOV toggle + colorpicker
-AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
+-- FOV toggle + colorpickers (separate statements: Colorpicker() returns the
+-- picker extension, not the toggle, so chaining a second picker would error)
+local FoVToggle = AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
     C.FOV = Value
     if fovCircle then
         fovCircle.Visible = Value and C.Enable
     end
-end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
+end})
+FoVToggle:Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.FoVColor = Value end
     if fovCircle and typeof(Value) == "Color3" then
         fovCircle.Color = Value
     end
-end}):Colorpicker({Name = "Locked Color", Flag = "Locked Color", Default = Color3.fromRGB(255, 150, 150), Callback = function(Value, Alpha)
+end})
+FoVToggle:Colorpicker({Name = "Locked Color", Flag = "Locked Color", Default = Color3.fromRGB(255, 150, 150), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.LockedColor = Value end
 end})
 
