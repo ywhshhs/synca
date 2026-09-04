@@ -8,6 +8,7 @@ local C = {
     TeamCheck = false,
     FOV = false,
     FOVSize = 100,
+    FOVMode = "Center",
     WallCheck = false,
     Smoothness = 10,
     Prediction = 5,
@@ -118,6 +119,11 @@ AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suf
     end
 end})
 
+-- FOV anchor: locked to screen center, or follows the cursor/touch point
+AimbotSection:Dropdown({Name = "FoV Position", Flag = "FOVMode", Default = "Center", Items = {"Center", "Cursor"}, Callback = function(Value)
+    C.FOVMode = Value
+end})
+
 -- Wall Check toggle
 AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, Callback = function(Value)
     C.WallCheck = Value
@@ -141,6 +147,19 @@ local AIMBOT = {
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+
+-- FOV anchor point: screen center, or live cursor/touch position
+local function getFovCenter()
+    local cam = workspace.CurrentCamera
+    if not cam then return Vector2.new(0, 0) end
+    if C.FOVMode == "Cursor" then
+        local ok, pos = pcall(function() return UIS:GetMouseLocation() end)
+        if ok and pos then return Vector2.new(pos.X, pos.Y) end
+    end
+    local sc = cam.ViewportSize / 2
+    return Vector2.new(sc.X, sc.Y)
+end
 
 -- Helpers
 -- Team objects compare by instance. (The old code read player.Team.TeamId,
@@ -209,9 +228,9 @@ local function isInFOV(targetPos)
     if not cam then return false end
     local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
     if not onScreen then return false end
-    local centerX = cam.ViewportSize.X / 2
-    local centerY = cam.ViewportSize.Y / 2
-    local distance = math.sqrt((screenPos.X - centerX)^2 + (screenPos.Y - centerY)^2)
+    -- Same anchor + radius as the drawn circle, so visuals match targeting exactly
+    local anchor = getFovCenter()
+    local distance = math.sqrt((screenPos.X - anchor.X)^2 + (screenPos.Y - anchor.Y)^2)
     return distance <= C.FOVSize
 end
 
@@ -249,8 +268,12 @@ local function executeAim(target)
         velocity = root.Velocity
     end
 
-    local lookDir = velocity.Magnitude > 0 and velocity.Unit or cam.CFrame.LookVector
-    local predictedPos = headPos + (lookDir * C.Prediction)
+    -- Only lead the target when it is actually moving; a stationary enemy is
+    -- aimed at directly (old code pushed the aim point off along camera-look).
+    local predictedPos = headPos
+    if C.Prediction > 0 and velocity.Magnitude > 0.5 then
+        predictedPos = headPos + (velocity.Unit * C.Prediction)
+    end
 
     local targetCF = CFrame.lookAt(cam.CFrame.Position, predictedPos)
 
@@ -267,13 +290,13 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
         local cam = workspace.CurrentCamera
         if not cam then return end
-        local screenCenter = cam.ViewportSize / 2
-        fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
+        local anchor = getFovCenter()
+        fovCircle.Position = anchor
         fovCircle.Radius = C.FOVSize
 
         -- Update FOV visualization
         fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
-        setCrosshair(C.Enable or C.AutoTarget, screenCenter.X, screenCenter.Y)
+        setCrosshair(C.Enable or C.AutoTarget, anchor.X, anchor.Y)
 
         -- AutoTarget mode (mobile)
         if C.AutoTarget then
