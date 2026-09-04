@@ -293,6 +293,9 @@ local function isValidTarget(player)
     if not char then return false end
     if not char:FindFirstChild("HumanoidRootPart") then return false end
     if not char:FindFirstChild("Head") then return false end
+    -- Alive check: skip the dead (Health 0 = ragdoll/despawning, not a threat)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
     if isTeamMate(player) then return false end
     return true
 end
