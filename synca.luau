@@ -50,9 +50,6 @@ local C = {
     BoxFillColor = Color3.fromRGB(255, 255, 255),
     BoxFillOpacity = 30,
     TeamColors = false,
-    Desync = false,
-    DesyncMode = "Freeze",
-    SpinSpeed = 180,
     Resolver = false,
     ResolverRate = 60,
     PredictionVertical = 0.13,
@@ -63,7 +60,6 @@ local C = {
     TargetDot = false,
     TargetDotSize = 6,
     TargetDotFilled = true,
-    OrbitDistance = 12,
     SpoofVelocity = false,
     SpoofType = "Prediction Breaker",
     SpoofStrength = 500,
@@ -190,25 +186,6 @@ end)
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
-
--- Desync ghost: client-only marker showing where the SERVER sees your body
--- while desynced. Purely visual, never replicates or collides.
-local serverMarker = nil
-pcall(function()
-    local p = Instance.new("Part")
-    p.Name = "ItemMarker"
-    p.Anchored = true
-    p.CanCollide = false
-    p.CanQuery = false
-    p.CanTouch = false
-    p.Transparency = 1
-    p.Material = Enum.Material.Neon
-    p.Color = Color3.fromRGB(0, 255, 0)
-    p.Size = Vector3.new(3, 5, 2)
-    p.CFrame = CFrame.new(0, -100, 0)
-    p.Parent = workspace
-    serverMarker = p
-end)
 
 local Window = Library:Window({
     Name = "synca",
@@ -346,11 +323,11 @@ AimbotSection:Toggle({Name = "Target Dot", Flag = "TargetDot", Default = false, 
     C.TargetDot = Value
 end})
 
-AimbotSection:Slider({Name = "Dot Size", Min = 2, Max = 12, Default = 6, Suffix = "px", Decimals = 1, Flag = "TargetDotSize", Callback = function(Value)
+AimbotSection:Slider({Name = "Target Size", Min = 2, Max = 12, Default = 6, Suffix = "px", Decimals = 1, Flag = "TargetDotSize", Callback = function(Value)
     C.TargetDotSize = Value
 end})
 
-AimbotSection:Toggle({Name = "Dot Filled", Flag = "TargetDotFilled", Default = true, Callback = function(Value)
+AimbotSection:Toggle({Name = "Target Filled", Flag = "TargetDotFilled", Default = true, Callback = function(Value)
     C.TargetDotFilled = Value
 end})
 
@@ -368,7 +345,7 @@ AdvancedSection:Slider({Name = "Humanize", Min = 0, Max = 10, Default = 0, Suffi
 end})
 
 -- Prediction toggle (no more resetting the slider to 0)
-AdvancedSection:Toggle({Name = "Prediction", Flag = "PredictionEnabled", Default = false, Callback = function(Value)
+AdvancedSection:Toggle({Name = "Enable Prediction", Flag = "PredictionEnabled", Default = false, Callback = function(Value)
     C.PredictionEnabled = Value
 end})
 
@@ -425,24 +402,6 @@ AdvancedSection:Slider({Name = "Vertical Smoothing", Min = 1, Max = 100, Default
 end})
 
 local MiscSection = CombatTab:Section({Name = "Movement", Side = 2})
-
--- Desync: the server replicates a frozen/spinning body while you walk freely.
--- Freeze captures the spot on enable; Spin rotates the replicated body.
-MiscSection:Toggle({Name = "Desync", Flag = "Desync", Default = false, Callback = function(Value)
-    C.Desync = Value
-end})
-
-MiscSection:Dropdown({Name = "Desync Mode", Flag = "DesyncMode", Default = "Freeze", Items = {"Freeze", "Spin", "Local Strafe"}, Callback = function(Value)
-    C.DesyncMode = Value
-end})
-
-MiscSection:Slider({Name = "Spin Speed", Min = 10, Max = 360, Default = 180, Suffix = " deg/s", Decimals = 1, Flag = "SpinSpeed", Callback = function(Value)
-    C.SpinSpeed = Value
-end})
-
-MiscSection:Slider({Name = "Orbit Distance", Min = 5, Max = 30, Default = 12, Suffix = " studs", Decimals = 1, Flag = "OrbitDistance", Callback = function(Value)
-    C.OrbitDistance = Value
-end})
 
 -- Velocity Spoof: what the server sees for your velocity (masking)
 MiscSection:Toggle({Name = "Velocity Spoof", Flag = "SpoofVelocity", Default = false, Callback = function(Value)
@@ -596,11 +555,11 @@ end})
 
 ESPSection:Toggle({Name = "Head Dot", Flag = "HeadDot", Default = false, Callback = function(Value)
     C.HeadDot = Value
-end}):Colorpicker({Name = "Dot Color", Flag = "Dot Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+end}):Colorpicker({Name = "Head Color", Flag = "Dot Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.HeadDotColor = Value end
 end})
 
-ESPSection:Slider({Name = "Dot Size", Min = 2, Max = 12, Default = 4, Suffix = "px", Decimals = 1, Flag = "HeadDotSize", Callback = function(Value)
+ESPSection:Slider({Name = "Head Size", Min = 2, Max = 12, Default = 4, Suffix = "px", Decimals = 1, Flag = "HeadDotSize", Callback = function(Value)
     C.HeadDotSize = Value
 end})
 
@@ -948,6 +907,7 @@ local function clearEspEntry(player)
         if e.cn then for _, ln in ipairs(e.cn) do ln:Remove() end end
         if e.hpNum then e.hpNum:Remove() end
         if e.sk then for _, ln in ipairs(e.sk) do ln:Remove() end end
+        if e.jd then for _, dot in ipairs(e.jd) do dot:Remove() end end
         if e.dot then e.dot:Remove() end
         if e.hl then e.hl:Destroy() end
     end)
@@ -966,6 +926,7 @@ local function hideEspEntry(e)
         if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
         if e.hpNum then e.hpNum.Visible = false end
         if e.sk then for _, ln in ipairs(e.sk) do ln.Visible = false end end
+        if e.jd then for _, dot in ipairs(e.jd) do dot.Visible = false end end
         if e.dot then e.dot.Visible = false end
         if e.hl then e.hl.Enabled = false end
     end)
@@ -1028,6 +989,14 @@ local function getEspEntry(player)
                 ln.Visible = false
                 ln.Thickness = 1
                 e.sk[i] = ln
+            end
+            e.jd = {}
+            for i = 1, 6 do
+                local dot = Drawing.new("Circle")
+                dot.Visible = false
+                dot.Filled = true
+                dot.Radius = 2
+                e.jd[i] = dot
             end
             e.dot = Drawing.new("Circle")
             e.dot.Visible = false
@@ -1337,8 +1306,28 @@ local function updateESP(dt)
                     ln.Visible = false
                 end
             end
+            -- Joint dots over head/torso/hands/feet so the skeleton reads
+            -- as a body instead of bare stick lines.
+            local joints = {head, torso, la, ra, ll, rl}
+            for i, part in ipairs(joints) do
+                local dot = e.jd and e.jd[i]
+                if dot and part then
+                    local pp, po = cam:WorldToViewportPoint(part.Position)
+                    if po then
+                        dot.Visible = true
+                        dot.Position = Vector2.new(pp.X, pp.Y)
+                        dot.Radius = 2
+                        dot.Color = C.SkeletonColor
+                    else
+                        dot.Visible = false
+                    end
+                elseif dot then
+                    dot.Visible = false
+                end
+            end
         elseif e.sk then
             for _, ln in ipairs(e.sk) do ln.Visible = false end
+            if e.jd then for _, dot in ipairs(e.jd) do dot.Visible = false end end
         end
         if C.HeadDot and e.dot then
             local hd = char:FindFirstChild("Head")
@@ -1365,92 +1354,9 @@ Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
 
--- Desync engine (offset-desync pattern, same family as Nameless Admin's): the
--- anchor is placed on PostSimulation AND Heartbeat (post-physics,
--- pre-replication) so the replicated packet carries the SERVER-side CFrame;
--- RenderStepped (pre-render) restores your real CFrame so YOU walk freely.
--- Freeze = server sees you standing where you enabled it. Spin = server
--- sees you rotating in place. The restore target tracks genuine movement
--- only (placed-vs-real check), resets per life and per mode; the displaced
--- flag stops a hitch from collapsing the desync.
+-- Shared RunService handle for the velocity spoof / fake lag loops below.
 local RSVC = game:GetService("RunService")
-local desyncAnchor = nil
-local desyncSaved = nil
-local desyncPlaced = nil
-local desyncDisplaced = false
-local desyncLastChar = nil
-local desyncLastMode = nil
-local DESYNC_EPS = 0.05
-local orbitAngle = 0
 
--- True when the body is sitting exactly where WE put it (as opposed to a
--- genuine new position from walking/physics). Position-eps plus facing-dot
--- so a same-frame second placement never corrupts the restore target.
-local function desyncIsPlaced(cf)
-    if not desyncPlaced then return false end
-    if (cf.Position - desyncPlaced.Position).Magnitude > DESYNC_EPS then return false end
-    return cf.LookVector:Dot(desyncPlaced.LookVector) > 0.999
-end
-
-local function desyncPlaceAnchor(dt)
-    pcall(function()
-        if serverMarker then serverMarker.Transparency = 1 end
-        if not C.Desync then
-            desyncAnchor = nil
-            desyncPlaced = nil
-            return
-        end
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        -- New life or new mode = fresh desync state.
-        if desyncLastChar ~= char or desyncLastMode ~= C.DesyncMode then
-            desyncLastChar = char
-            desyncLastMode = C.DesyncMode
-            desyncAnchor = nil
-            desyncPlaced = nil
-            desyncDisplaced = false
-            desyncSaved = nil
-        end
-        -- Track the real position, but never mistake our own placed CFrame
-        -- for genuine movement (same-frame double placement otherwise snaps
-        -- the restore target onto the anchor).
-        if not desyncDisplaced then
-            desyncSaved = hrp.CFrame
-            desyncDisplaced = true
-        elseif desyncSaved and not desyncIsPlaced(hrp.CFrame) then
-            desyncSaved = hrp.CFrame
-        end
-        if C.DesyncMode == "Freeze" then
-            if not desyncAnchor then desyncAnchor = hrp.CFrame end
-            hrp.CFrame = desyncAnchor
-            -- Pin the server body: without this it drifts off-anchor between
-            -- placements. Spin skips it (better local feel, tracks anyway).
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        elseif C.DesyncMode == "Spin" then
-            hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(C.SpinSpeed) * (dt or 0.016), 0)
-        else -- Local Strafe: server orbits your own real spot, you see normal
-            local base = (desyncSaved or hrp.CFrame).Position
-            orbitAngle += math.rad(C.SpinSpeed) * (dt or 0.016)
-            local oPos = base + Vector3.new(math.cos(orbitAngle) * C.OrbitDistance, 0, math.sin(orbitAngle) * C.OrbitDistance)
-            hrp.CFrame = CFrame.lookAt(oPos, Vector3.new(base.X, oPos.Y, base.Z))
-        end
-        desyncPlaced = hrp.CFrame
-        if serverMarker then
-            serverMarker.CFrame = hrp.CFrame
-            serverMarker.Transparency = 0.5
-        end
-    end)
-end
-
-pcall(function()
-    RSVC.PostSimulation:Connect(function(dt)
-        desyncPlaceAnchor(dt)
-    end)
-end)
-RSVC.Heartbeat:Connect(function(dt)
-    desyncPlaceAnchor(dt)
-end)
 
 -- Triggerbot click: executor press first, held-tool fallback for touch.
 -- Non-blocking (release is deferred) so the render loop never yields.
@@ -1555,15 +1461,6 @@ end)
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
-        -- Desync restore FIRST: show your real self before render. Runs even
-        -- right after toggling off, so you can never get stuck at the anchor.
-        if desyncDisplaced and desyncSaved then
-            local dchar = LocalPlayer.Character
-            local dhrp = dchar and dchar:FindFirstChild("HumanoidRootPart")
-            if dhrp then dhrp.CFrame = desyncSaved end
-            desyncDisplaced = false
-            desyncSaved = nil
-        end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local anchor = getFovCenter()
