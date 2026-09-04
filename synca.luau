@@ -9,6 +9,11 @@ local C = {
     FOV = false,
     FOVSize = 100,
     FOVMode = "Center",
+    FOVOpacity = 40,
+    FOVFilled = false,
+    FOVFillColor = Color3.fromRGB(166, 147, 243),
+    FOVFillOpacity = 20,
+    FOVThickness = 2,
     WallCheck = false,
     AliveCheck = true,
     Smoothness = 10,
@@ -104,6 +109,24 @@ pcall(function()
     tracerLine.Transparency = 0.8
 end)
 
+-- FOV fill disc (outline circle stays separate so both keep own opacity)
+local fovFill
+do
+    local ok, obj = pcall(function() return Drawing.new("Circle") end)
+    if ok and obj and typeof(obj) ~= "string" then
+        fovFill = obj
+    else
+        fovFill = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+    end
+end
+pcall(function()
+    fovFill.Visible = false
+    fovFill.Filled = true
+    fovFill.Color = Color3.fromRGB(166, 147, 243)
+    fovFill.Transparency = 0.2
+    fovFill.Radius = 100
+end)
+
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
@@ -117,12 +140,14 @@ local Watermark = Library:Watermark("Aimbot")
 local KeybindList = Library:KeybindList()
 
 local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
+local VisualsTab = Window:Page({Name = "Visuals", Columns = 2, Subtabs = false})
 local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
 -- Sections
 local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
 local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = 2})
-local VisualsSection = CombatTab:Section({Name = "Visuals", Side = 1})
+local TargetSection = CombatTab:Section({Name = "Target", Side = 2})
+local ESPSection = VisualsTab:Section({Name = "ESP", Side = 1})
 
 -- Enable toggle with keybind chained on
 AimbotSection:Toggle({Name = "Enable", Flag = "Enable", Default = false, Callback = function(Value)
@@ -164,6 +189,24 @@ AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suf
     if fovCircle then
         fovCircle.Radius = Value
     end
+end})
+
+AimbotSection:Slider({Name = "FoV Opacity", Min = 0, Max = 100, Default = 40, Suffix = "%", Decimals = 1, Flag = "FOVOpacity", Callback = function(Value)
+    C.FOVOpacity = Value
+end})
+
+AimbotSection:Toggle({Name = "FoV Filled", Flag = "FOVFilled", Default = false, Callback = function(Value)
+    C.FOVFilled = Value
+end}):Colorpicker({Name = "Fill Color", Flag = "FOV Fill Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.FOVFillColor = Value end
+end})
+
+AimbotSection:Slider({Name = "Fill Opacity", Min = 0, Max = 100, Default = 20, Suffix = "%", Decimals = 1, Flag = "FOVFillOpacity", Callback = function(Value)
+    C.FOVFillOpacity = Value
+end})
+
+AimbotSection:Slider({Name = "FoV Thickness", Min = 1, Max = 5, Default = 2, Suffix = "px", Decimals = 1, Flag = "FOVThickness", Callback = function(Value)
+    C.FOVThickness = Value
 end})
 
 -- FOV anchor: locked to screen center, or follows the cursor/touch point
@@ -208,7 +251,7 @@ AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suf
 end})
 
 -- Target tracer: line from origin to the currently targeted part
-VisualsSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
+TargetSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
     C.Tracer = Value
 end}):Colorpicker({Name = "Tracer Color", Flag = "Tracer Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
     if tracerLine and typeof(Value) == "Color3" then
@@ -216,46 +259,46 @@ end}):Colorpicker({Name = "Tracer Color", Flag = "Tracer Color", Default = Color
     end
 end})
 
-VisualsSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default = "Cursor", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
+TargetSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default = "Cursor", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
     C.TracerOrigin = Value
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
-VisualsSection:Toggle({Name = "ESP Highlight", Flag = "ESPHighlight", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "ESP Highlight", Flag = "ESPHighlight", Default = false, Callback = function(Value)
     C.ESPHighlight = Value
 end}):Colorpicker({Name = "ESP Color", Flag = "ESP Color", Default = Color3.fromRGB(170, 140, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.ESPHighlightColor = Value end
 end})
 
-VisualsSection:Slider({Name = "ESP Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "ESPHighlightOpacity", Callback = function(Value)
+ESPSection:Slider({Name = "ESP Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "ESPHighlightOpacity", Callback = function(Value)
     C.ESPHighlightOpacity = Value
 end})
 
-VisualsSection:Toggle({Name = "Box ESP", Flag = "BoxESP", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "Box ESP", Flag = "BoxESP", Default = false, Callback = function(Value)
     C.BoxESP = Value
 end}):Colorpicker({Name = "Box Color", Flag = "Box Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.BoxColor = Value end
 end})
 
-VisualsSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
     C.HealthBar = Value
 end})
 
-VisualsSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
     C.NameESP = Value
 end})
 
-VisualsSection:Toggle({Name = "Distance ESP", Flag = "DistanceESP", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "Distance ESP", Flag = "DistanceESP", Default = false, Callback = function(Value)
     C.DistanceESP = Value
 end})
 
-VisualsSection:Toggle({Name = "ESP Tracer", Flag = "ESPTracer", Default = false, Callback = function(Value)
+ESPSection:Toggle({Name = "ESP Tracer", Flag = "ESPTracer", Default = false, Callback = function(Value)
     C.ESPTracer = Value
 end}):Colorpicker({Name = "ESP Tracer Color", Flag = "ESP Tracer Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.ESPTracerColor = Value end
 end})
 
-VisualsSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
+ESPSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
     C.ESPTracerOrigin = Value
 end})
 
@@ -398,7 +441,7 @@ local function findClosestTarget()
     return closest
 end
 
-local function executeAim(target)
+local function executeAim(target, dt)
     local cam = workspace.CurrentCamera
     if not cam then return end
     local headPos, headPart = getAimPart(target)
@@ -420,9 +463,11 @@ local function executeAim(target)
 
     local targetCF = CFrame.lookAt(cam.CFrame.Position, predictedPos)
 
-    -- Higher smoothness = slower glide, 1 = instant snap.
-    local alpha = math.clamp(1 / math.max(C.Smoothness, 1), 0, 1)
-    cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
+    -- Higher smoothness = slower glide, 1 = instant snap. dt-corrected so the
+    -- feel is identical at any frame rate (same glide at 30fps and 144fps).
+    local rate = 1 / math.max(C.Smoothness, 1)
+    local alpha = 1 - math.pow(1 - rate, (dt or 0.016) * 60)
+    cam.CFrame = cam.CFrame:Lerp(targetCF, math.clamp(alpha, 0, 1))
 end
 
 -- Single Highlight instance, reparented whenever the target changes. One Highlight
@@ -682,9 +727,16 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         local anchor = getFovCenter()
         fovCircle.Position = anchor
         fovCircle.Radius = C.FOVSize
+        fovCircle.Transparency = C.FOVOpacity / 100
+        fovCircle.Thickness = C.FOVThickness
+        fovFill.Position = anchor
+        fovFill.Radius = C.FOVSize
+        fovFill.Color = C.FOVFillColor
+        fovFill.Transparency = C.FOVFillOpacity / 100
 
         -- Update FOV visualization (follows the master Enable switch)
         fovCircle.Visible = C.FOV and C.Enable
+        fovFill.Visible = C.FOV and C.FOVFilled and C.Enable
         setCrosshair(C.Enable, anchor.X, anchor.Y)
 
         -- Target tracer: draw origin -> live target part position
@@ -723,9 +775,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             local target = findClosestTarget()
             if target then
                 AIMBOT.Target = target
-                local _, part = getAimPart(target)
-                AIMBOT.TargetPart = part
-                executeAim(target)
+                executeAim(target, dt)
             else
                 AIMBOT.Target = nil
                 AIMBOT.TargetPart = nil
@@ -735,9 +785,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             local target = findClosestTarget()
             if target then
                 AIMBOT.Target = target
-                local _, part = getAimPart(target)
-                AIMBOT.TargetPart = part
-                executeAim(target)
+                executeAim(target, dt)
             else
                 AIMBOT.Target = nil
                 AIMBOT.TargetPart = nil
