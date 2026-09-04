@@ -11,7 +11,11 @@ local C = {
     FOVMode = "Center",
     WallCheck = false,
     Smoothness = 10,
+    PredictionEnabled = false,
     Prediction = 5,
+    TargetPart = "Head",
+    Tracer = false,
+    TracerOrigin = "Cursor",
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -67,6 +71,24 @@ local function setCrosshair(visible, x, y)
     end)
 end
 
+-- Target tracer line (origin -> targeted part), pcall-guarded for executors
+-- without Drawing support.
+local tracerLine
+do
+    local ok, obj = pcall(function() return Drawing.new("Line") end)
+    if ok and obj and typeof(obj) ~= "string" then
+        tracerLine = obj
+    else
+        tracerLine = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+    end
+end
+pcall(function()
+    tracerLine.Visible = false
+    tracerLine.Thickness = 1
+    tracerLine.Color = Color3.fromRGB(166, 147, 243)
+    tracerLine.Transparency = 0.8
+end)
+
 local Window = Library:Window({
     Name = "Aimbot",
     FadeSpeed = 0.25
@@ -81,6 +103,7 @@ local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 -- Sections
 local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
 local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = 2})
+local VisualsSection = CombatTab:Section({Name = "Visuals", Side = 1})
 
 -- Enable toggle with keybind chained on
 AimbotSection:Toggle({Name = "Enable", Flag = "Enable", Default = false, Callback = function(Value)
@@ -129,14 +152,37 @@ AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, 
     C.WallCheck = Value
 end})
 
+-- Targeted part (aliases resolve on both R6 and R15, see PART_ALIASES)
+AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "Head", Items = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}, Callback = function(Value)
+    C.TargetPart = Value
+end})
+
 -- Smoothness slider
 AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
 end})
 
+-- Prediction toggle (no more resetting the slider to 0)
+AdvancedSection:Toggle({Name = "Prediction", Flag = "PredictionEnabled", Default = false, Callback = function(Value)
+    C.PredictionEnabled = Value
+end})
+
 -- Prediction slider
 AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
     C.Prediction = Value
+end})
+
+-- Target tracer: line from origin to the currently targeted part
+VisualsSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
+    C.Tracer = Value
+end}):Colorpicker({Name = "Tracer Color", Flag = "Tracer Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
+    if tracerLine and typeof(Value) == "Color3" then
+        tracerLine.Color = Value
+    end
+end})
+
+VisualsSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default = "Cursor", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
+    C.TracerOrigin = Value
 end})
 
 -- Aim Bot State
@@ -183,12 +229,30 @@ local function isValidTarget(player)
     return true
 end
 
-local function getHeadPos(player)
-    local char = player.Character
+-- R6 + R15 part resolver: each dropdown option maps to its R6 name first,
+-- then the R15 equivalent. Falls back to Head so a missing part never breaks
+-- targeting.
+local PART_ALIASES = {
+    ["Head"] = {"Head"},
+    ["HumanoidRootPart"] = {"HumanoidRootPart"},
+    ["Torso"] = {"Torso", "UpperTorso"},
+    ["Left Arm"] = {"Left Arm", "LeftUpperArm"},
+    ["Right Arm"] = {"Right Arm", "RightUpperArm"},
+    ["Left Leg"] = {"Left Leg", "LeftUpperLeg"},
+    ["Right Leg"] = {"Right Leg", "RightUpperLeg"},
+}
+
+local function getAimPart(player)
+    local char = player and player.Character
     if not char then return nil, nil end
+    local aliases = PART_ALIASES[C.TargetPart] or PART_ALIASES["Head"]
+    for _, name in ipairs(aliases) do
+        local part = char:FindFirstChild(name)
+        if part then return part.Position, part end
+    end
     local head = char:FindFirstChild("Head")
-    if not head then return nil, nil end
-    return head.Position, head
+    if head then return head.Position, head end
+    return nil, nil
 end
 
 -- Wall check must ignore the TARGET's own body too: the old version only
@@ -241,7 +305,7 @@ local function findClosestTarget()
     local closestDist = math.huge
     for _, player in pairs(Players:GetPlayers()) do
         if not isValidTarget(player) then continue end
-        local pos, part = getHeadPos(player)
+        local pos, part = getAimPart(player)
         if not pos then continue end
         if not isInFOV(pos) then continue end
         if not canSeeTarget(pos, player) then continue end
@@ -258,7 +322,7 @@ end
 local function executeAim(target)
     local cam = workspace.CurrentCamera
     if not cam then return end
-    local headPos, headPart = getHeadPos(target)
+    local headPos, headPart = getAimPart(target)
     if not headPos then return end
 
     local velocity = Vector3.new(0, 0, 0)
@@ -268,10 +332,10 @@ local function executeAim(target)
         velocity = root.Velocity
     end
 
-    -- Only lead the target when it is actually moving; a stationary enemy is
-    -- aimed at directly (old code pushed the aim point off along camera-look).
+    -- Only lead the target when prediction is toggled on AND it is actually
+    -- moving; otherwise aim at the part directly.
     local predictedPos = headPos
-    if C.Prediction > 0 and velocity.Magnitude > 0.5 then
+    if C.PredictionEnabled and C.Prediction > 0 and velocity.Magnitude > 0.5 then
         predictedPos = headPos + (velocity.Unit * C.Prediction)
     end
 
@@ -295,13 +359,40 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovCircle.Visible = C.FOV and C.Enable
         setCrosshair(C.Enable, anchor.X, anchor.Y)
 
+        -- Target tracer: draw origin -> live target part position
+        local traceFrom, traceTo = nil, nil
+        if C.Tracer and C.Enable and AIMBOT.Target then
+            local tPos, _ = getAimPart(AIMBOT.Target)
+            if tPos then
+                local sp, onScreen = cam:WorldToViewportPoint(tPos)
+                if onScreen then
+                    traceTo = Vector2.new(sp.X, sp.Y)
+                    if C.TracerOrigin == "Bottom" then
+                        traceFrom = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+                    elseif C.TracerOrigin == "Top" then
+                        traceFrom = Vector2.new(cam.ViewportSize.X / 2, 0)
+                    else
+                        local okm, mp = pcall(function() return UIS:GetMouseLocation() end)
+                        if okm and mp then traceFrom = Vector2.new(mp.X, mp.Y) end
+                    end
+                end
+            end
+        end
+        if traceFrom and traceTo then
+            tracerLine.Visible = true
+            tracerLine.From = traceFrom
+            tracerLine.To = traceTo
+        else
+            tracerLine.Visible = false
+        end
+
         -- Enable is the master switch: nothing aims while it is off.
         -- AutoTarget only selects auto-acquire style, it never forces Enable.
         if C.Enable and C.AutoTarget then
             local target = findClosestTarget()
             if target then
                 AIMBOT.Target = target
-                local _, part = getHeadPos(target)
+                local _, part = getAimPart(target)
                 AIMBOT.TargetPart = part
                 executeAim(target)
             else
@@ -313,7 +404,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             local target = findClosestTarget()
             if target then
                 AIMBOT.Target = target
-                local _, part = getHeadPos(target)
+                local _, part = getAimPart(target)
                 AIMBOT.TargetPart = part
                 executeAim(target)
             else
