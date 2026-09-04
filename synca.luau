@@ -47,7 +47,6 @@ local C = {
     BoxFillColor = Color3.fromRGB(255, 255, 255),
     BoxFillOpacity = 30,
     TeamColors = false,
-    RakNetDesync = false,
     Desync = false,
     DesyncMode = "Freeze",
     SpinSpeed = 180,
@@ -97,41 +96,6 @@ end)
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
-
--- RakNet desync (executor-provided network API, the same raknet.desync(bool)
--- call Nameless Admin uses). Pauses outgoing replication at the network
--- layer, so the server hard-freezes your position while the client runs
--- free. Only exists on executors that ship a raknet lib; otherwise the
--- toggle refuses with a notification. Reads only, never writes globals.
-local function getRaknetTable()
-    local rk = nil
-    pcall(function()
-        rk = raknet
-    end)
-    if type(rk) == "table" or type(rk) == "userdata" then
-        return rk
-    end
-    return nil
-end
-
-local function setRaknetDesync(enabled)
-    local rk = getRaknetTable()
-    if not rk then
-        return false, "executor has no raknet API"
-    end
-    local helper = nil
-    pcall(function()
-        helper = rk.desync
-    end)
-    if type(helper) ~= "function" then
-        return false, "raknet.desync unavailable"
-    end
-    local ok, ret = pcall(helper, enabled == true)
-    if ok and ret ~= false then
-        return true, ret
-    end
-    return false, ret or "raknet.desync failed"
-end
 
 -- Desync ghost: client-only marker showing where the SERVER sees your body
 -- while desynced. Purely visual, never replicates or collides.
@@ -297,27 +261,6 @@ end})
 
 MiscSection:Slider({Name = "Spin Speed", Min = 10, Max = 360, Default = 180, Suffix = " deg/s", Decimals = 1, Flag = "SpinSpeed", Callback = function(Value)
     C.SpinSpeed = Value
-end})
-
--- Network-layer freeze. Stronger than offset desync when your executor
--- supports it; refuses cleanly when it does not.
-local raknetToggle
-raknetToggle = MiscSection:Toggle({Name = "RakNet Desync", Flag = "RakNetDesync", Default = false, Callback = function(Value)
-    if Value then
-        local ok, msg = setRaknetDesync(true)
-        if ok then
-            C.RakNetDesync = true
-            Library:Notification("RakNet desync enabled", 3, Library.Theme.Accent)
-        else
-            C.RakNetDesync = false
-            Library:Notification("RakNet unavailable: " .. tostring(msg), 4, Library.Theme.Accent)
-            pcall(function() raknetToggle:Set(false) end)
-        end
-    else
-        pcall(setRaknetDesync, false)
-        C.RakNetDesync = false
-        Library:Notification("RakNet desync disabled", 3, Library.Theme.Accent)
-    end
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
@@ -1037,47 +980,66 @@ end)
 -- pre-replication) so the replicated packet carries the SERVER-side CFrame;
 -- RenderStepped (pre-render) restores your real CFrame so YOU walk freely.
 -- Freeze = server sees you standing where you enabled it. Spin = server
--- sees you rotating in place. Real position is tracked eps-gated and reset
--- per life; the displaced flag stops a hitch from collapsing the desync.
+-- sees you rotating in place. The restore target tracks genuine movement
+-- only (placed-vs-real check), resets per life and per mode; the displaced
+-- flag stops a hitch from collapsing the desync.
 local RSVC = game:GetService("RunService")
 local desyncAnchor = nil
 local desyncSaved = nil
+local desyncPlaced = nil
 local desyncDisplaced = false
 local desyncLastChar = nil
+local desyncLastMode = nil
 local DESYNC_EPS = 0.05
+
+-- True when the body is sitting exactly where WE put it (as opposed to a
+-- genuine new position from walking/physics). Position-eps plus facing-dot
+-- so a same-frame second placement never corrupts the restore target.
+local function desyncIsPlaced(cf)
+    if not desyncPlaced then return false end
+    if (cf.Position - desyncPlaced.Position).Magnitude > DESYNC_EPS then return false end
+    return cf.LookVector:Dot(desyncPlaced.LookVector) > 0.999
+end
 
 local function desyncPlaceAnchor(dt)
     pcall(function()
         if serverMarker then serverMarker.Transparency = 1 end
         if not C.Desync then
             desyncAnchor = nil
+            desyncPlaced = nil
             return
         end
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        -- New life = fresh desync state; never restore a corpse's position.
-        if desyncLastChar ~= char then
+        -- New life or new mode = fresh desync state.
+        if desyncLastChar ~= char or desyncLastMode ~= C.DesyncMode then
             desyncLastChar = char
+            desyncLastMode = C.DesyncMode
             desyncAnchor = nil
+            desyncPlaced = nil
             desyncDisplaced = false
             desyncSaved = nil
         end
-        -- Track the real position, but only when it actually moved: physics
-        -- jitter must not pollute the restore target.
+        -- Track the real position, but never mistake our own placed CFrame
+        -- for genuine movement (same-frame double placement otherwise snaps
+        -- the restore target onto the anchor).
         if not desyncDisplaced then
             desyncSaved = hrp.CFrame
             desyncDisplaced = true
-        elseif desyncSaved and (hrp.CFrame.Position - desyncSaved.Position).Magnitude > DESYNC_EPS then
+        elseif desyncSaved and not desyncIsPlaced(hrp.CFrame) then
             desyncSaved = hrp.CFrame
         end
         if C.DesyncMode == "Freeze" then
             if not desyncAnchor then desyncAnchor = hrp.CFrame end
             hrp.CFrame = desyncAnchor
+            -- Pin the server body: without this it drifts off-anchor between
+            -- placements. Spin skips it (better local feel, tracks anyway).
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         else
             hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(C.SpinSpeed) * (dt or 0.016), 0)
         end
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        desyncPlaced = hrp.CFrame
         if serverMarker then
             serverMarker.CFrame = hrp.CFrame
             serverMarker.Transparency = 0.5
