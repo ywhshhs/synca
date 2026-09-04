@@ -40,6 +40,13 @@ local C = {
     Skeleton = false,
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     ESPMaxDistance = 0,
+    Priority = "Closest",
+    Deadzone = 2,
+    Humanize = 0,
+    BoxFill = false,
+    BoxFillColor = Color3.fromRGB(255, 255, 255),
+    BoxFillOpacity = 30,
+    TeamColors = false,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -57,6 +64,7 @@ end
 pcall(function()
     fovCircle.Visible = false
     fovCircle.Thickness = 2
+    fovCircle.NumSides = 64
     fovCircle.Color = Color3.fromRGB(166, 147, 243)
     fovCircle.Transparency = 0.4
     fovCircle.Filled = false
@@ -76,6 +84,7 @@ end
 pcall(function()
     fovFill.Visible = false
     fovFill.Filled = true
+    fovFill.NumSides = 64
     fovFill.Color = Color3.fromRGB(166, 147, 243)
     fovFill.Transparency = 0.2
     fovFill.Radius = 100
@@ -86,11 +95,11 @@ end)
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
 
 local Window = Library:Window({
-    Name = "Aimbot",
+    Name = "synca",
     FadeSpeed = 0.25
 })
 
-local Watermark = Library:Watermark("Aimbot")
+local Watermark = Library:Watermark("synca")
 local KeybindList = Library:KeybindList()
 
 local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
@@ -177,6 +186,11 @@ AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "He
     C.TargetPart = Value
 end})
 
+-- Acquisition priority: nearest in 3D, nearest to crosshair, or weakest
+AimbotSection:Dropdown({Name = "Target Priority", Flag = "Priority", Default = "Closest", Items = {"Closest", "Cursor", "Lowest HP"}, Callback = function(Value)
+    C.Priority = Value
+end})
+
 -- Target highlight: one Highlight on the whole character model (every part)
 AimbotSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
     C.Highlight = Value
@@ -191,6 +205,14 @@ end})
 -- Smoothness slider
 AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
+end})
+
+AdvancedSection:Slider({Name = "Aim Deadzone", Min = 0, Max = 20, Default = 2, Suffix = "px", Decimals = 1, Flag = "Deadzone", Callback = function(Value)
+    C.Deadzone = Value
+end})
+
+AdvancedSection:Slider({Name = "Humanize", Min = 0, Max = 10, Default = 0, Suffix = "", Decimals = 1, Flag = "Humanize", Callback = function(Value)
+    C.Humanize = Value
 end})
 
 -- Prediction toggle (no more resetting the slider to 0)
@@ -226,6 +248,20 @@ end})
 
 ESPSection:Toggle({Name = "Box Outline", Flag = "BoxOutline", Default = false, Callback = function(Value)
     C.BoxOutline = Value
+end})
+
+ESPSection:Toggle({Name = "Box Fill", Flag = "BoxFill", Default = false, Callback = function(Value)
+    C.BoxFill = Value
+end}):Colorpicker({Name = "Fill Color", Flag = "Box Fill Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.BoxFillColor = Value end
+end})
+
+ESPSection:Slider({Name = "Fill Opacity", Min = 0, Max = 100, Default = 30, Suffix = "%", Decimals = 1, Flag = "BoxFillOpacity", Callback = function(Value)
+    C.BoxFillOpacity = Value
+end})
+
+ESPSection:Toggle({Name = "Team Colors", Flag = "TeamColors", Default = false, Callback = function(Value)
+    C.TeamColors = Value
 end})
 
 ESPSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
@@ -269,6 +305,7 @@ local AIMBOT = {
     Target = nil,
     TargetPart = nil,
     Lock = nil,
+    noiseT = 0,
 }
 
 local Players = game:GetService("Players")
@@ -387,16 +424,28 @@ local function findClosestTarget()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
     local closest = nil
-    local closestDist = math.huge
+    local bestScore = math.huge
     for _, player in pairs(Players:GetPlayers()) do
         if not isValidTarget(player) then continue end
         local pos, part = getAimPart(player)
         if not pos then continue end
         if not isInFOV(pos) then continue end
         if not canSeeTarget(pos, player) then continue end
-        local dist = (cam.CFrame.Position - pos).Magnitude
-        if dist < closestDist then
-            closestDist = dist
+        local score
+        if C.Priority == "Cursor" then
+            local sp, on = cam:WorldToViewportPoint(pos)
+            if not on then continue end
+            local anchor = getFovCenter()
+            score = math.sqrt((sp.X - anchor.X)^2 + (sp.Y - anchor.Y)^2)
+        elseif C.Priority == "Lowest HP" then
+            local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if not hum then continue end
+            score = hum.Health
+        else
+            score = (cam.CFrame.Position - pos).Magnitude
+        end
+        if score < bestScore then
+            bestScore = score
             closest = player
             AIMBOT.TargetPart = part
         end
@@ -447,7 +496,27 @@ local function executeAim(target, dt)
         predictedPos = headPos + (velocity.Unit * C.Prediction)
     end
 
-    local targetCF = CFrame.lookAt(cam.CFrame.Position, predictedPos)
+    -- Humanize: slow sinusoidal wander around the aim point so the camera
+    -- never tracks with pixel-perfect linearity (the classic behavioral tell).
+    AIMBOT.noiseT += (dt or 0.016)
+    local aimPos = predictedPos
+    if C.Humanize > 0 then
+        local t = AIMBOT.noiseT
+        aimPos += Vector3.new(math.sin(t * 3.1), math.sin(t * 2.3 + 1.3), math.sin(t * 2.7 + 2.1)) * (C.Humanize * 0.12)
+    end
+
+    -- Deadzone: already on target -> hold still instead of micro-correcting.
+    if C.Deadzone > 0 then
+        local sp, on = cam:WorldToViewportPoint(aimPos)
+        if on then
+            local anchor = getFovCenter()
+            if math.sqrt((sp.X - anchor.X)^2 + (sp.Y - anchor.Y)^2) <= C.Deadzone then
+                return
+            end
+        end
+    end
+
+    local targetCF = CFrame.lookAt(cam.CFrame.Position, aimPos)
 
     -- Higher smoothness = slower glide, 1 = instant snap. dt-corrected so the
     -- feel is identical at any frame rate (same glide at 30fps and 144fps).
@@ -472,7 +541,7 @@ local function updateHighlight()
     if want and char and not targetHighlight then
         local ok, hl = pcall(function()
             local h = Instance.new("Highlight")
-            h.Name = "SyncaTarget"
+            h.Name = "ItemHighlight"
             h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             h.Parent = char
             return h
@@ -505,6 +574,7 @@ local function clearEspEntry(player)
         if e.dist then e.dist:Remove() end
         if e.tracer then e.tracer:Remove() end
         if e.boxBg then e.boxBg:Remove() end
+        if e.boxFill then e.boxFill:Remove() end
         if e.cn then for _, ln in ipairs(e.cn) do ln:Remove() end end
         if e.hpNum then e.hpNum:Remove() end
         if e.sk then for _, ln in ipairs(e.sk) do ln:Remove() end end
@@ -521,6 +591,7 @@ local function hideEspEntry(e)
         if e.dist then e.dist.Visible = false end
         if e.tracer then e.tracer.Visible = false end
         if e.boxBg then e.boxBg.Visible = false end
+        if e.boxFill then e.boxFill.Visible = false end
         if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
         if e.hpNum then e.hpNum.Visible = false end
         if e.sk then for _, ln in ipairs(e.sk) do ln.Visible = false end end
@@ -563,6 +634,10 @@ local function getEspEntry(player)
             e.boxBg.Visible = false
             e.boxBg.Filled = false
             e.boxBg.Thickness = 1
+            e.boxFill = Drawing.new("Square")
+            e.boxFill.Visible = false
+            e.boxFill.Filled = true
+            e.boxFill.Thickness = 0
             e.cn = {}
             for i = 1, 8 do
                 local ln = Drawing.new("Line")
@@ -586,6 +661,14 @@ local function getEspEntry(player)
     end
     espCache[player] = e
     return e
+end
+
+-- Box color: player team color when Team Colors is on, else the picked color.
+local function espBoxColor(player)
+    if C.TeamColors and player.Team and player.Team.TeamColor then
+        return player.Team.TeamColor.Color
+    end
+    return C.BoxColor
 end
 
 -- 2D bounding box of a character model, clamped to the viewport.
@@ -663,7 +746,7 @@ local function updateESP(dt)
                 e.hl, e.hlChar = nil, nil
                 local okh, hl = pcall(function()
                     local h = Instance.new("Highlight")
-                    h.Name = "SyncaESP"
+                    h.Name = "ItemHighlight"
                     h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                     h.Parent = char
                     return h
@@ -721,7 +804,7 @@ local function updateESP(dt)
                     ln.Visible = true
                     ln.From = Vector2.new(p[1], p[2])
                     ln.To = Vector2.new(p[3], p[4])
-                    ln.Color = C.BoxColor
+                    ln.Color = espBoxColor(player)
                 end
             else
                 if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
@@ -737,13 +820,22 @@ local function updateESP(dt)
                     e.box.Visible = true
                     e.box.Position = Vector2.new(sx, sy)
                     e.box.Size = Vector2.new(sw, sh)
-                    e.box.Color = C.BoxColor
+                    e.box.Color = espBoxColor(player)
                 end
             end
         else
             if e.box then e.box.Visible = false end
             if e.boxBg then e.boxBg.Visible = false end
             if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
+        end
+        if C.BoxFill and e.boxFill then
+            e.boxFill.Visible = true
+            e.boxFill.Position = Vector2.new(sx, sy)
+            e.boxFill.Size = Vector2.new(sw, sh)
+            e.boxFill.Color = C.BoxFillColor
+            e.boxFill.Transparency = C.BoxFillOpacity / 100
+        elseif e.boxFill then
+            e.boxFill.Visible = false
         end
         if C.HealthBar and e.hpBg and e.hp then
             local hum = char:FindFirstChildOfClass("Humanoid")
