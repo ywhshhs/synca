@@ -36,6 +36,16 @@ local C = {
     ESPTracer = false,
     ESPTracerColor = Color3.fromRGB(255, 255, 255),
     ESPTracerOrigin = "Bottom",
+    StickyLock = true,
+    AutoFire = false,
+    AutoFireDelay = 0.15,
+    AutoFireRange = 25,
+    BoxStyle = "Box",
+    BoxOutline = false,
+    HealthNumber = false,
+    Skeleton = false,
+    SkeletonColor = Color3.fromRGB(255, 255, 255),
+    ESPMaxDistance = 0,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -251,6 +261,22 @@ AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suf
 end})
 
 -- Target tracer: line from origin to the currently targeted part
+TargetSection:Toggle({Name = "Sticky Lock", Flag = "StickyLock", Default = true, Callback = function(Value)
+    C.StickyLock = Value
+end})
+
+TargetSection:Toggle({Name = "Auto Fire", Flag = "AutoFire", Default = false, Callback = function(Value)
+    C.AutoFire = Value
+end})
+
+TargetSection:Slider({Name = "Fire Delay", Min = 0.05, Max = 1, Default = 0.15, Suffix = "s", Decimals = 2, Flag = "AutoFireDelay", Callback = function(Value)
+    C.AutoFireDelay = Value
+end})
+
+TargetSection:Slider({Name = "Fire Range", Min = 5, Max = 100, Default = 25, Suffix = "px", Decimals = 1, Flag = "AutoFireRange", Callback = function(Value)
+    C.AutoFireRange = Value
+end})
+
 TargetSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
     C.Tracer = Value
 end}):Colorpicker({Name = "Tracer Color", Flag = "Tracer Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
@@ -280,8 +306,20 @@ end}):Colorpicker({Name = "Box Color", Flag = "Box Color", Default = Color3.from
     if typeof(Value) == "Color3" then C.BoxColor = Value end
 end})
 
+ESPSection:Dropdown({Name = "Box Style", Flag = "BoxStyle", Default = "Box", Items = {"Box", "Corners"}, Callback = function(Value)
+    C.BoxStyle = Value
+end})
+
+ESPSection:Toggle({Name = "Box Outline", Flag = "BoxOutline", Default = false, Callback = function(Value)
+    C.BoxOutline = Value
+end})
+
 ESPSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
     C.HealthBar = Value
+end})
+
+ESPSection:Toggle({Name = "Health Number", Flag = "HealthNumber", Default = false, Callback = function(Value)
+    C.HealthNumber = Value
 end})
 
 ESPSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
@@ -300,6 +338,16 @@ end})
 
 ESPSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
     C.ESPTracerOrigin = Value
+end})
+
+ESPSection:Toggle({Name = "Skeleton ESP", Flag = "Skeleton", Default = false, Callback = function(Value)
+    C.Skeleton = Value
+end}):Colorpicker({Name = "Skeleton Color", Flag = "Skeleton Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.SkeletonColor = Value end
+end})
+
+ESPSection:Slider({Name = "ESP Max Distance", Min = 0, Max = 2000, Default = 0, Suffix = " studs", Decimals = 1, Flag = "ESPMaxDistance", Callback = function(Value)
+    C.ESPMaxDistance = Value
 end})
 
 -- Aim Bot State
@@ -542,6 +590,10 @@ local function clearEspEntry(player)
         if e.text then e.text:Remove() end
         if e.dist then e.dist:Remove() end
         if e.tracer then e.tracer:Remove() end
+        if e.boxBg then e.boxBg:Remove() end
+        if e.cn then for _, ln in ipairs(e.cn) do ln:Remove() end end
+        if e.hpNum then e.hpNum:Remove() end
+        if e.sk then for _, ln in ipairs(e.sk) do ln:Remove() end end
         if e.hl then e.hl:Destroy() end
     end)
 end
@@ -554,6 +606,10 @@ local function hideEspEntry(e)
         if e.text then e.text.Visible = false end
         if e.dist then e.dist.Visible = false end
         if e.tracer then e.tracer.Visible = false end
+        if e.boxBg then e.boxBg.Visible = false end
+        if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
+        if e.hpNum then e.hpNum.Visible = false end
+        if e.sk then for _, ln in ipairs(e.sk) do ln.Visible = false end end
         if e.hl then e.hl.Enabled = false end
     end)
     -- Reset box smoothing so a reappearing player never slides in from stale coords
@@ -589,6 +645,29 @@ local function getEspEntry(player)
             e.tracer = Drawing.new("Line")
             e.tracer.Visible = false
             e.tracer.Thickness = 1
+            e.boxBg = Drawing.new("Square")
+            e.boxBg.Visible = false
+            e.boxBg.Filled = false
+            e.boxBg.Thickness = 1
+            e.cn = {}
+            for i = 1, 8 do
+                local ln = Drawing.new("Line")
+                ln.Visible = false
+                ln.Thickness = 1
+                e.cn[i] = ln
+            end
+            e.hpNum = Drawing.new("Text")
+            e.hpNum.Visible = false
+            e.hpNum.Size = 13
+            e.hpNum.Center = false
+            e.hpNum.Outline = true
+            e.sk = {}
+            for i = 1, 5 do
+                local ln = Drawing.new("Line")
+                ln.Visible = false
+                ln.Thickness = 1
+                e.sk[i] = ln
+            end
         end)
     end
     espCache[player] = e
@@ -656,6 +735,13 @@ local function updateESP(dt)
             hideEspEntry(e)
             continue
         end
+        if C.ESPMaxDistance > 0 then
+            local hrp0 = char:FindFirstChild("HumanoidRootPart")
+            if hrp0 and (cam.CFrame.Position - hrp0.Position).Magnitude > C.ESPMaxDistance then
+                hideEspEntry(e)
+                continue
+            end
+        end
         -- ESP highlight (Instance-based, works without Drawing support)
         if C.ESPHighlight then
             if not e.hl or e.hlChar ~= char or e.hl.Parent ~= char then
@@ -704,13 +790,46 @@ local function updateESP(dt)
         local sx, sy, sw, sh = e.sx, e.sy, e.sw, e.sh
         local cx = sx + sw / 2
         local sbot = sy + sh
-        if C.BoxESP and e.box then
-            e.box.Visible = true
-            e.box.Position = Vector2.new(sx, sy)
-            e.box.Size = Vector2.new(sw, sh)
-            e.box.Color = C.BoxColor
-        elseif e.box then
-            e.box.Visible = false
+        if C.BoxESP then
+            if C.BoxStyle == "Corners" and e.cn then
+                if e.box then e.box.Visible = false end
+                if e.boxBg then e.boxBg.Visible = false end
+                local L = math.clamp(math.min(sw, sh) * 0.25, 4, 30)
+                local pts = {
+                    {sx, sy, sx + L, sy}, {sx, sy, sx, sy + L},
+                    {sx + sw, sy, sx + sw - L, sy}, {sx + sw, sy, sx + sw, sy + L},
+                    {sx, sbot, sx + L, sbot}, {sx, sbot, sx, sbot - L},
+                    {sx + sw, sbot, sx + sw - L, sbot}, {sx + sw, sbot, sx + sw, sbot - L},
+                }
+                for i = 1, 8 do
+                    local ln = e.cn[i]
+                    local p = pts[i]
+                    ln.Visible = true
+                    ln.From = Vector2.new(p[1], p[2])
+                    ln.To = Vector2.new(p[3], p[4])
+                    ln.Color = C.BoxColor
+                end
+            else
+                if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
+                if C.BoxOutline and e.boxBg then
+                    e.boxBg.Visible = true
+                    e.boxBg.Position = Vector2.new(sx - 1, sy - 1)
+                    e.boxBg.Size = Vector2.new(sw + 2, sh + 2)
+                    e.boxBg.Color = Color3.fromRGB(0, 0, 0)
+                elseif e.boxBg then
+                    e.boxBg.Visible = false
+                end
+                if e.box then
+                    e.box.Visible = true
+                    e.box.Position = Vector2.new(sx, sy)
+                    e.box.Size = Vector2.new(sw, sh)
+                    e.box.Color = C.BoxColor
+                end
+            end
+        else
+            if e.box then e.box.Visible = false end
+            if e.boxBg then e.boxBg.Visible = false end
+            if e.cn then for _, ln in ipairs(e.cn) do ln.Visible = false end end
         end
         if C.HealthBar and e.hpBg and e.hp then
             local hum = char:FindFirstChildOfClass("Humanoid")
@@ -730,6 +849,19 @@ local function updateESP(dt)
         else
             if e.hpBg then e.hpBg.Visible = false end
             if e.hp then e.hp.Visible = false end
+        end
+        if C.HealthNumber and e.hpNum then
+            local hum2 = char:FindFirstChildOfClass("Humanoid")
+            if hum2 and hum2.MaxHealth > 0 then
+                e.hpNum.Visible = true
+                e.hpNum.Text = tostring(math.floor(hum2.Health + 0.5))
+                e.hpNum.Position = Vector2.new(sx - 32, sy - 16)
+                e.hpNum.Color = Color3.fromRGB(255, 255, 255)
+            else
+                e.hpNum.Visible = false
+            end
+        elseif e.hpNum then
+            e.hpNum.Visible = false
         end
         -- Name centered top-middle; distance pinned to the top-right corner
         -- (opposite the left-side health bar).
@@ -763,12 +895,60 @@ local function updateESP(dt)
         elseif e.tracer then
             e.tracer.Visible = false
         end
+        if C.Skeleton and e.sk then
+            local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+            local head = char:FindFirstChild("Head")
+            local la = char:FindFirstChild("Left Arm") or char:FindFirstChild("LeftUpperArm")
+            local ra = char:FindFirstChild("Right Arm") or char:FindFirstChild("RightUpperArm")
+            local ll = char:FindFirstChild("Left Leg") or char:FindFirstChild("LeftUpperLeg")
+            local rl = char:FindFirstChild("Right Leg") or char:FindFirstChild("RightUpperLeg")
+            local segs = {{head, torso}, {torso, la}, {torso, ra}, {torso, ll}, {torso, rl}}
+            for i, pair in ipairs(segs) do
+                local ln = e.sk[i]
+                local a, b = pair[1], pair[2]
+                if a and b then
+                    local pa, oa = cam:WorldToViewportPoint(a.Position)
+                    local pb, ob = cam:WorldToViewportPoint(b.Position)
+                    if oa and ob then
+                        ln.Visible = true
+                        ln.From = Vector2.new(pa.X, pa.Y)
+                        ln.To = Vector2.new(pb.X, pb.Y)
+                        ln.Color = C.SkeletonColor
+                    else
+                        ln.Visible = false
+                    end
+                else
+                    ln.Visible = false
+                end
+            end
+        elseif e.sk then
+            for _, ln in ipairs(e.sk) do ln.Visible = false end
+        end
     end
 end
 
 Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
+
+-- Auto Fire click: executor click first, VirtualInputManager fallback.
+-- Non-blocking (release is deferred) so the render loop never yields.
+local lastShot = 0
+local VIM = nil
+pcall(function() VIM = game:GetService("VirtualInputManager") end)
+local function fireClick()
+    if typeof(mouse1click) == "function" then
+        pcall(mouse1click)
+    elseif typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+        pcall(mouse1press)
+        task.delay(0.05, function() pcall(mouse1release) end)
+    elseif VIM then
+        pcall(function() VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0) end)
+        task.delay(0.05, function()
+            pcall(function() VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0) end)
+        end)
+    end
+end
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
@@ -825,12 +1005,29 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         -- frame (that re-picking was the tug-of-war). The lock drops when the
         -- target dies, hides, or leaves the FOV/screen — look away to release.
         if C.Enable then
-            if not isLockValid(AIMBOT.Lock) then
+            if C.StickyLock then
+                if not isLockValid(AIMBOT.Lock) then
+                    AIMBOT.Lock = findClosestTarget()
+                end
+            else
                 AIMBOT.Lock = findClosestTarget()
             end
             AIMBOT.Target = AIMBOT.Lock
             if AIMBOT.Target then
                 executeAim(AIMBOT.Target, dt)
+                if C.AutoFire then
+                    local ap, _ = getAimPart(AIMBOT.Target)
+                    if ap then
+                        local asp, aon = cam:WorldToViewportPoint(ap)
+                        if aon then
+                            local dd = math.sqrt((asp.X - anchor.X)^2 + (asp.Y - anchor.Y)^2)
+                            if dd <= C.AutoFireRange and os.clock() - lastShot >= C.AutoFireDelay then
+                                lastShot = os.clock()
+                                fireClick()
+                            end
+                        end
+                    end
+                end
             else
                 AIMBOT.TargetPart = nil
             end
