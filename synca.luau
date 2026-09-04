@@ -306,6 +306,7 @@ end})
 local AIMBOT = {
     Target = nil,
     TargetPart = nil,
+    Lock = nil,
 }
 
 local Players = game:GetService("Players")
@@ -441,6 +442,29 @@ local function findClosestTarget()
     return closest
 end
 
+-- Sticky-lock validation: the lock holds while the target is alive, visible
+-- and inside the FOV/screen. Look away (or break line of sight) to drop it.
+local function isLockValid(target)
+    if not target then return false end
+    if not isValidTarget(target) then return false end
+    local cam = workspace.CurrentCamera
+    if not cam then return false end
+    local pos, _ = getAimPart(target)
+    if not pos then return false end
+    if C.FOV then
+        local screenPos, onScreen = cam:WorldToViewportPoint(pos)
+        if not onScreen then return false end
+        local anchor = getFovCenter()
+        local d = math.sqrt((screenPos.X - anchor.X)^2 + (screenPos.Y - anchor.Y)^2)
+        if d > C.FOVSize then return false end
+    else
+        local _, onScreen = cam:WorldToViewportPoint(pos)
+        if not onScreen then return false end
+    end
+    if not canSeeTarget(pos, target) then return false end
+    return true
+end
+
 local function executeAim(target, dt)
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -516,6 +540,7 @@ local function clearEspEntry(player)
         if e.hpBg then e.hpBg:Remove() end
         if e.hp then e.hp:Remove() end
         if e.text then e.text:Remove() end
+        if e.dist then e.dist:Remove() end
         if e.tracer then e.tracer:Remove() end
         if e.hl then e.hl:Destroy() end
     end)
@@ -527,9 +552,12 @@ local function hideEspEntry(e)
         if e.hpBg then e.hpBg.Visible = false end
         if e.hp then e.hp.Visible = false end
         if e.text then e.text.Visible = false end
+        if e.dist then e.dist.Visible = false end
         if e.tracer then e.tracer.Visible = false end
         if e.hl then e.hl.Enabled = false end
     end)
+    -- Reset box smoothing so a reappearing player never slides in from stale coords
+    e.sx = nil
 end
 
 local function getEspEntry(player)
@@ -553,6 +581,11 @@ local function getEspEntry(player)
             e.text.Size = 13
             e.text.Center = true
             e.text.Outline = true
+            e.dist = Drawing.new("Text")
+            e.dist.Visible = false
+            e.dist.Size = 13
+            e.dist.Center = false
+            e.dist.Outline = true
             e.tracer = Drawing.new("Line")
             e.tracer.Visible = false
             e.tracer.Thickness = 1
@@ -602,7 +635,7 @@ local function espTracerOrigin(cam)
     return Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
 end
 
-local function updateESP()
+local function updateESP(dt)
     local cam = workspace.CurrentCamera
     if not cam then return end
     for player, _ in pairs(espCache) do
@@ -656,12 +689,25 @@ local function updateESP()
             if e.hl then pcall(function() e.hl.Enabled = false end) end
             continue
         end
+        -- Smooth the rect toward its new position: raw bounding-box corners
+        -- jump around on fast camera flicks, the smoothed rect does not.
         local w, h = maxX - minX, maxY - minY
-        local cx = (minX + maxX) / 2
+        local k = 1 - math.exp(-18 * (dt or 0.016))
+        if e.sx == nil then
+            e.sx, e.sy, e.sw, e.sh = minX, minY, w, h
+        else
+            e.sx += (minX - e.sx) * k
+            e.sy += (minY - e.sy) * k
+            e.sw += (w - e.sw) * k
+            e.sh += (h - e.sh) * k
+        end
+        local sx, sy, sw, sh = e.sx, e.sy, e.sw, e.sh
+        local cx = sx + sw / 2
+        local sbot = sy + sh
         if C.BoxESP and e.box then
             e.box.Visible = true
-            e.box.Position = Vector2.new(minX, minY)
-            e.box.Size = Vector2.new(w, h)
+            e.box.Position = Vector2.new(sx, sy)
+            e.box.Size = Vector2.new(sw, sh)
             e.box.Color = C.BoxColor
         elseif e.box then
             e.box.Visible = false
@@ -672,42 +718,47 @@ local function updateESP()
             if hum and hum.MaxHealth > 0 then
                 frac = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
             end
-            local bx = minX - 5
+            local bx = sx - 5
             e.hpBg.Visible = true
-            e.hpBg.From = Vector2.new(bx, maxY)
-            e.hpBg.To = Vector2.new(bx, minY)
+            e.hpBg.From = Vector2.new(bx, sbot)
+            e.hpBg.To = Vector2.new(bx, sy)
             e.hpBg.Color = Color3.fromRGB(0, 0, 0)
             e.hp.Visible = true
-            e.hp.From = Vector2.new(bx, maxY)
-            e.hp.To = Vector2.new(bx, maxY - h * frac)
+            e.hp.From = Vector2.new(bx, sbot)
+            e.hp.To = Vector2.new(bx, sbot - sh * frac)
             e.hp.Color = Color3.fromRGB(255 * (1 - frac), 255 * frac, 0)
         else
             if e.hpBg then e.hpBg.Visible = false end
             if e.hp then e.hp.Visible = false end
         end
-        if e.text then
-            local parts = {}
-            if C.NameESP then table.insert(parts, player.Name) end
-            if C.DistanceESP then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local d = math.floor((cam.CFrame.Position - hrp.Position).Magnitude)
-                    table.insert(parts, "[" .. d .. "m]")
-                end
-            end
-            if #parts > 0 then
-                e.text.Visible = true
-                e.text.Text = table.concat(parts, "  ")
-                e.text.Position = Vector2.new(cx, minY - 16)
-                e.text.Color = Color3.fromRGB(255, 255, 255)
+        -- Name centered top-middle; distance pinned to the top-right corner
+        -- (opposite the left-side health bar).
+        if C.NameESP and e.text then
+            e.text.Visible = true
+            e.text.Text = player.Name
+            e.text.Position = Vector2.new(cx, sy - 16)
+            e.text.Color = Color3.fromRGB(255, 255, 255)
+        elseif e.text then
+            e.text.Visible = false
+        end
+        if C.DistanceESP and e.dist then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = math.floor((cam.CFrame.Position - hrp.Position).Magnitude)
+                e.dist.Visible = true
+                e.dist.Text = "[" .. d .. "m]"
+                e.dist.Position = Vector2.new(sx + sw + 3, sy - 16)
+                e.dist.Color = Color3.fromRGB(255, 255, 255)
             else
-                e.text.Visible = false
+                e.dist.Visible = false
             end
+        elseif e.dist then
+            e.dist.Visible = false
         end
         if C.ESPTracer and e.tracer then
             e.tracer.Visible = true
             e.tracer.From = espTracerOrigin(cam)
-            e.tracer.To = Vector2.new(cx, maxY)
+            e.tracer.To = Vector2.new(cx, sbot)
             e.tracer.Color = C.ESPTracerColor
         elseif e.tracer then
             e.tracer.Visible = false
@@ -767,30 +818,24 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         end
 
         updateHighlight()
-        updateESP()
+        updateESP(dt)
 
-        -- Enable is the master switch: nothing aims while it is off.
-        -- AutoTarget only selects auto-acquire style, it never forces Enable.
-        if C.Enable and C.AutoTarget then
-            local target = findClosestTarget()
-            if target then
-                AIMBOT.Target = target
-                executeAim(target, dt)
-            else
-                AIMBOT.Target = nil
-                AIMBOT.TargetPart = nil
+        -- Enable is the master switch: nothing aims while it is off. While on,
+        -- hold a sticky lock on one target instead of re-picking closest every
+        -- frame (that re-picking was the tug-of-war). The lock drops when the
+        -- target dies, hides, or leaves the FOV/screen — look away to release.
+        if C.Enable then
+            if not isLockValid(AIMBOT.Lock) then
+                AIMBOT.Lock = findClosestTarget()
             end
-        elseif C.Enable then
-            -- Manual mode
-            local target = findClosestTarget()
-            if target then
-                AIMBOT.Target = target
-                executeAim(target, dt)
+            AIMBOT.Target = AIMBOT.Lock
+            if AIMBOT.Target then
+                executeAim(AIMBOT.Target, dt)
             else
-                AIMBOT.Target = nil
                 AIMBOT.TargetPart = nil
             end
         else
+            AIMBOT.Lock = nil
             AIMBOT.Target = nil
             AIMBOT.TargetPart = nil
         end
