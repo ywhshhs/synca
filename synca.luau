@@ -103,7 +103,7 @@ end})
 AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
     C.FOV = Value
     if fovCircle then
-        fovCircle.Visible = Value and (C.Enable or C.AutoTarget)
+        fovCircle.Visible = Value and C.Enable
     end
 end}):Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
     if fovCircle and typeof(Value) == "Color3" then
@@ -291,23 +291,22 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovCircle.Position = anchor
         fovCircle.Radius = C.FOVSize
 
-        -- Update FOV visualization
-        fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
-        setCrosshair(C.Enable or C.AutoTarget, anchor.X, anchor.Y)
+        -- Update FOV visualization (follows the master Enable switch)
+        fovCircle.Visible = C.FOV and C.Enable
+        setCrosshair(C.Enable, anchor.X, anchor.Y)
 
-        -- AutoTarget mode (mobile)
-        if C.AutoTarget then
+        -- Enable is the master switch: nothing aims while it is off.
+        -- AutoTarget only selects auto-acquire style, it never forces Enable.
+        if C.Enable and C.AutoTarget then
             local target = findClosestTarget()
             if target then
                 AIMBOT.Target = target
                 local _, part = getHeadPos(target)
                 AIMBOT.TargetPart = part
-                C.Enable = true
                 executeAim(target)
             else
                 AIMBOT.Target = nil
                 AIMBOT.TargetPart = nil
-                C.Enable = false
             end
         elseif C.Enable then
             -- Manual mode
