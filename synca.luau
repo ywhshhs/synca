@@ -16,6 +16,9 @@ local C = {
     TargetPart = "Head",
     Tracer = false,
     TracerOrigin = "Cursor",
+    Highlight = false,
+    HighlightColor = Color3.fromRGB(255, 60, 60),
+    HighlightOpacity = 50,
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -185,6 +188,17 @@ VisualsSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default 
     C.TracerOrigin = Value
 end})
 
+-- Target highlight: one Highlight on the whole character model (every part)
+VisualsSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
+    C.Highlight = Value
+end}):Colorpicker({Name = "Highlight Color", Flag = "Highlight Color", Default = Color3.fromRGB(255, 60, 60), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.HighlightColor = Value end
+end})
+
+VisualsSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "HighlightOpacity", Callback = function(Value)
+    C.HighlightOpacity = Value
+end})
+
 -- Aim Bot State
 local AIMBOT = {
     Target = nil,
@@ -346,6 +360,39 @@ local function executeAim(target)
     cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
 end
 
+-- Single Highlight instance, reparented whenever the target changes. One Highlight
+-- on the character model covers every body part, not just the selected aim part.
+local targetHighlight = nil
+local highlightedChar = nil
+local function updateHighlight()
+    local want = C.Highlight and C.Enable and AIMBOT.Target ~= nil
+    local char = want and AIMBOT.Target.Character or nil
+    if targetHighlight then
+        if not want or highlightedChar ~= char or targetHighlight.Parent ~= char then
+            pcall(function() targetHighlight:Destroy() end)
+            targetHighlight, highlightedChar = nil, nil
+        end
+    end
+    if want and char and not targetHighlight then
+        local ok, hl = pcall(function()
+            local h = Instance.new("Highlight")
+            h.Name = "SyncaTarget"
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            h.Parent = char
+            return h
+        end)
+        if ok and hl then targetHighlight, highlightedChar = hl, char end
+    end
+    if targetHighlight then
+        pcall(function()
+            targetHighlight.FillColor = C.HighlightColor
+            targetHighlight.OutlineColor = C.HighlightColor
+            targetHighlight.FillTransparency = 1 - (C.HighlightOpacity / 100)
+            targetHighlight.OutlineTransparency = 0
+        end)
+    end
+end
+
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
@@ -385,6 +432,8 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         else
             tracerLine.Visible = false
         end
+
+        updateHighlight()
 
         -- Enable is the master switch: nothing aims while it is off.
         -- AutoTarget only selects auto-acquire style, it never forces Enable.
