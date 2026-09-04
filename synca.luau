@@ -47,6 +47,7 @@ local C = {
     BoxFillColor = Color3.fromRGB(255, 255, 255),
     BoxFillOpacity = 30,
     TeamColors = false,
+    RakNetDesync = false,
     Desync = false,
     DesyncMode = "Freeze",
     SpinSpeed = 180,
@@ -96,6 +97,41 @@ end)
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
+
+-- RakNet desync (executor-provided network API, the same raknet.desync(bool)
+-- call Nameless Admin uses). Pauses outgoing replication at the network
+-- layer, so the server hard-freezes your position while the client runs
+-- free. Only exists on executors that ship a raknet lib; otherwise the
+-- toggle refuses with a notification. Reads only, never writes globals.
+local function getRaknetTable()
+    local rk = nil
+    pcall(function()
+        rk = raknet
+    end)
+    if type(rk) == "table" or type(rk) == "userdata" then
+        return rk
+    end
+    return nil
+end
+
+local function setRaknetDesync(enabled)
+    local rk = getRaknetTable()
+    if not rk then
+        return false, "executor has no raknet API"
+    end
+    local helper = nil
+    pcall(function()
+        helper = rk.desync
+    end)
+    if type(helper) ~= "function" then
+        return false, "raknet.desync unavailable"
+    end
+    local ok, ret = pcall(helper, enabled == true)
+    if ok and ret ~= false then
+        return true, ret
+    end
+    return false, ret or "raknet.desync failed"
+end
 
 -- Desync ghost: client-only marker showing where the SERVER sees your body
 -- while desynced. Purely visual, never replicates or collides.
@@ -261,6 +297,27 @@ end})
 
 MiscSection:Slider({Name = "Spin Speed", Min = 10, Max = 360, Default = 180, Suffix = " deg/s", Decimals = 1, Flag = "SpinSpeed", Callback = function(Value)
     C.SpinSpeed = Value
+end})
+
+-- Network-layer freeze. Stronger than offset desync when your executor
+-- supports it; refuses cleanly when it does not.
+local raknetToggle
+raknetToggle = MiscSection:Toggle({Name = "RakNet Desync", Flag = "RakNetDesync", Default = false, Callback = function(Value)
+    if Value then
+        local ok, msg = setRaknetDesync(true)
+        if ok then
+            C.RakNetDesync = true
+            Library:Notification("RakNet desync enabled", 3, Library.Theme.Accent)
+        else
+            C.RakNetDesync = false
+            Library:Notification("RakNet unavailable: " .. tostring(msg), 4, Library.Theme.Accent)
+            pcall(function() raknetToggle:Set(false) end)
+        end
+    else
+        pcall(setRaknetDesync, false)
+        C.RakNetDesync = false
+        Library:Notification("RakNet desync disabled", 3, Library.Theme.Accent)
+    end
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
