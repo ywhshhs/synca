@@ -240,8 +240,8 @@ local Window = Library:window({
 
 local Watermark = Library:watermark({ name = "synca" })
 
-local CombatTab = Window:page({ name = "Combat" })
-local VisualsTab = Window:page({ name = "Visuals" })
+local CombatTab = Window:tab({ name = "Combat" })
+local VisualsTab = Window:tab({ name = "Visuals" })
 
 -- Sections (Vaderhaxx sections hang directly off tabs)
 local AimbotSection = CombatTab:section({name = "Aimbot", side = "left"})
