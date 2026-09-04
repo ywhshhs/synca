@@ -240,13 +240,15 @@ local Watermark = Library:Watermark({ Name = "synca" })
 local KeybindList = Library:KeybindList({ Name = "Keybinds" })
 
 local CombatTab = Window:Page({ Name = "Combat" })
+local CombatSub = CombatTab:SubPage({ Name = "Main" })
 local VisualsTab = Window:Page({ Name = "Visuals" })
+local VisualsSub = VisualsTab:SubPage({ Name = "ESP" })
 Window:CreateSettingsPage()
 
--- Sections
-local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
-local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = SIDE2})
-local ESPSection = VisualsTab:Section({Name = "ESP", Side = 1})
+-- Sections (nhack requires sections under a SubPage, which owns the columns)
+local AimbotSection = CombatSub:Section({Name = "Aimbot", Side = 1})
+local AdvancedSection = CombatSub:Section({Name = "Advanced", Side = SIDE2})
+local ESPSection = VisualsSub:Section({Name = "ESP", Side = 1})
 
 -- Enable toggle with keybind chained on
 AimbotSection:Toggle({Name = "Enable", Flag = "Enable", Default = false, Callback = function(Value)
@@ -445,7 +447,7 @@ AdvancedSection:Slider({Name = "Vertical Smoothing", Min = 1, Max = 100, Default
     C.SmoothnessVertical = Value
 end})
 
-local MiscSection = CombatTab:Section({Name = "Movement", Side = SIDE2})
+local MiscSection = CombatSub:Section({Name = "Movement", Side = SIDE2})
 
 -- Desync: the server replicates a frozen/spinning body while you walk freely.
 -- Freeze captures the spot on enable; Spin rotates the replicated body.
@@ -581,7 +583,7 @@ ESPSection:Slider({Name = "Tracer Opacity", Min = 0, Max = 100, Default = 100, S
     C.ESPTracerOpacity = Value
 end})
 
-local CrossSection = VisualsTab:Section({Name = "Crosshair", Side = SIDE2})
+local CrossSection = VisualsSub:Section({Name = "Crosshair", Side = SIDE2})
 
 CrossSection:Toggle({Name = "Crosshair", Flag = "Crosshair", Default = false, Callback = function(Value)
     C.Crosshair = Value
