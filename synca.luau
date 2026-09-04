@@ -4,7 +4,6 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ywhsh
 -- Config storage (defined first so callbacks never hit nil)
 local C = {
     Enable = false,
-    AutoTarget = false,
     TeamCheck = false,
     FOV = false,
     FOVSize = 100,
@@ -211,11 +210,6 @@ end}):Keybind({Name = "Hotkey", Flag = "Hotkey", Default = Enum.KeyCode.RightShi
     C.Enable = Value
 end})
 
--- Auto Target toggle (mobile - auto lock onto targets in FOV)
-AimbotSection:Toggle({Name = "Auto Target", Flag = "AutoTarget", Default = false, Callback = function(Value)
-    C.AutoTarget = Value
-end})
-
 -- Team Check toggle
 AimbotSection:Toggle({Name = "Team Check", Flag = "TeamCheck", Default = false, Callback = function(Value)
     C.TeamCheck = Value
@@ -231,7 +225,7 @@ end})
 local FoVToggle = AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
     C.FOV = Value
     if fovCircle then
-        fovCircle.Visible = Value and C.Enable
+        fovCircle.Visible = Value
     end
 end})
 FoVToggle:Colorpicker({Name = "FoV Color", Flag = "FoV Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
@@ -469,11 +463,11 @@ end})
 
 ESPSection:Toggle({Name = "Box Fill", Flag = "BoxFill", Default = false, Callback = function(Value)
     C.BoxFill = Value
-end}):Colorpicker({Name = "Fill Color", Flag = "Box Fill Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+end}):Colorpicker({Name = "Box Fill Color", Flag = "Box Fill Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.BoxFillColor = Value end
 end})
 
-ESPSection:Slider({Name = "Fill Opacity", Min = 0, Max = 100, Default = 30, Suffix = "%", Decimals = 1, Flag = "BoxFillOpacity", Callback = function(Value)
+ESPSection:Slider({Name = "Box Fill Opacity", Min = 0, Max = 100, Default = 30, Suffix = "%", Decimals = 1, Flag = "BoxFillOpacity", Callback = function(Value)
     C.BoxFillOpacity = Value
 end})
 
@@ -1059,19 +1053,29 @@ end
 local function updateESP(dt)
     local cam = workspace.CurrentCamera
     if not cam then return end
-    for player, _ in pairs(espCache) do
-        if not Players:FindFirstChild(player.Name) then
+    -- Collect first, delete after: removing keys during pairs traversal is
+    -- undefined behavior and can skip entries (leaking their drawings).
+    do
+        local gone = {}
+        for player, _ in pairs(espCache) do
+            if not Players:FindFirstChild(player.Name) then
+                table.insert(gone, player)
+            end
+        end
+        for _, player in ipairs(gone) do
             clearEspEntry(player)
         end
     end
     for _, player in ipairs(Players:GetPlayers()) do
-        local e = getEspEntry(player)
         -- Same eligibility as aiming (respects Team Check), minus FOV/wall gates:
-        -- ESP shows everyone on screen.
+        -- ESP shows everyone on screen. Checked BEFORE creating drawings so
+        -- invalid players never allocate an entry.
         if not isValidTarget(player) then
-            hideEspEntry(e)
+            local stale = espCache[player]
+            if stale then hideEspEntry(stale) end
             continue
         end
+        local e = getEspEntry(player)
         local char = player.Character
         if not char then
             hideEspEntry(e)
@@ -1375,6 +1379,10 @@ local function triggerFire()
 end
 
 local function resolveTriggerTarget()
+    -- Never fire while dead: clicks accomplish nothing and look odd.
+    local lchar = LocalPlayer.Character
+    local lhum = lchar and lchar:FindFirstChildOfClass("Humanoid")
+    if not lhum or lhum.Health <= 0 then return nil end
     local ok, hit = pcall(function() return LOCAL_MOUSE.Target end)
     if not ok or not hit then return nil end
     local model = hit:FindFirstAncestorOfClass("Model")
@@ -1478,10 +1486,11 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovOutline.Radius = C.FOVSize
         fovOutline.Thickness = C.FOVThickness + 2
 
-        -- Update FOV visualization (follows the master Enable switch)
-        fovCircle.Visible = C.FOV and C.Enable
-        fovFill.Visible = C.FOV and C.FOVFilled and C.Enable
-        fovOutline.Visible = C.FOV and C.FOVOutline and C.Enable
+        -- Update FOV visualization (follows the FOV switch so the circle can
+        -- be sized/positioned before the aimbot itself is enabled)
+        fovCircle.Visible = C.FOV
+        fovFill.Visible = C.FOV and C.FOVFilled
+        fovOutline.Visible = C.FOV and C.FOVOutline
 
         -- Crosshair overlay at screen center
         pcall(function()
