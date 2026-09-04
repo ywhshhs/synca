@@ -14,20 +14,56 @@ local C = {
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
 -- so fovCircle must already exist or launch throws "attempt to index nil")
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Thickness = 2
-fovCircle.Color = Color3.fromRGB(166, 147, 243)
-fovCircle.Transparency = 0.4
-fovCircle.Filled = false
-fovCircle.Radius = 100
+local fovCircle
+do
+    local ok, obj = pcall(function() return Drawing.new("Circle") end)
+    if ok and obj and typeof(obj) ~= "string" then
+        fovCircle = obj
+    else
+        -- Executor has no Drawing support: dummy object that absorbs property sets
+        fovCircle = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+    end
+end
+pcall(function()
+    fovCircle.Visible = false
+    fovCircle.Thickness = 2
+    fovCircle.Color = Color3.fromRGB(166, 147, 243)
+    fovCircle.Transparency = 0.4
+    fovCircle.Filled = false
+    fovCircle.Radius = 100
+end)
 
-local crosshair = Drawing.new("Cross")
-crosshair.Visible = false
-crosshair.Thickness = 1
-crosshair.Color = Color3.fromRGB(166, 147, 243)
-crosshair.Size = 10
-crosshair.Transparency = 0.7
+-- Crosshair: "Cross" is NOT a valid Drawing type (valid: Line, Circle, Square,
+-- Text, Image, Triangle), so Drawing.new("Cross") returns an error string ->
+-- line 26 crash. Build crosshair from two Lines instead, with pcall guards
+-- so mobile executors without Drawing support don't crash at all.
+local crossH, crossV
+pcall(function()
+    crossH = Drawing.new("Line")
+    crossH.Visible = false
+    crossH.Thickness = 1
+    crossH.Color = Color3.fromRGB(166, 147, 243)
+    crossH.Transparency = 0.7
+    crossV = Drawing.new("Line")
+    crossV.Visible = false
+    crossV.Thickness = 1
+    crossV.Color = Color3.fromRGB(166, 147, 243)
+    crossV.Transparency = 0.7
+end)
+local function setCrosshair(visible, x, y)
+    pcall(function()
+        if crossH and crossV then
+            crossH.Visible = visible
+            crossV.Visible = visible
+            if x and y then
+                crossH.From = Vector2.new(x - 7, y)
+                crossH.To = Vector2.new(x + 7, y)
+                crossV.From = Vector2.new(x, y - 7)
+                crossV.To = Vector2.new(x, y + 7)
+            end
+        end
+    end)
+end
 
 local Window = Library:Window({
     Name = "Aimbot",
@@ -224,11 +260,10 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         local screenCenter = cam.ViewportSize / 2
         fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
         fovCircle.Radius = C.FOVSize
-        crosshair.Position = Vector2.new(screenCenter.X, screenCenter.Y)
 
         -- Update FOV visualization
         fovCircle.Visible = C.FOV and (C.Enable or C.AutoTarget)
-        crosshair.Visible = C.Enable or C.AutoTarget
+        setCrosshair(C.Enable or C.AutoTarget, screenCenter.X, screenCenter.Y)
 
         -- AutoTarget mode (mobile)
         if C.AutoTarget then
