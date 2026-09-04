@@ -1039,6 +1039,7 @@ end)
 local RunService = game:GetService("RunService")
 local strafeAngle = 0
 local savedCF = nil
+local displaced = false
 
 local function getStrafeTarget()
     if not C.Strafe then return nil end
@@ -1055,18 +1056,24 @@ end
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if serverMarker then serverMarker.Transparency = 1 end
-        if not C.Strafe then savedCF = nil return end
+        if not C.Strafe then return end
         local t = getStrafeTarget()
-        if not t then savedCF = nil return end
+        if not t then return end
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local thc = t.Character
         local thrp = thc and thc:FindFirstChild("HumanoidRootPart")
-        if not hrp or not thrp then savedCF = nil return end
+        if not hrp or not thrp then return end
         strafeAngle += math.rad(C.StrafeSpeed) * (dt or 0.016)
         local center = thrp.Position + Vector3.new(0, C.StrafeHeight, 0)
         local orbitPos = center + Vector3.new(math.cos(strafeAngle) * C.StrafeRadius, 0, math.sin(strafeAngle) * C.StrafeRadius)
-        savedCF = hrp.CFrame
+        -- Only snapshot when not already displaced: a second Heartbeat before
+        -- the next render must NOT overwrite the real position with the orbit
+        -- one (that collapse is what left users stuck following the target).
+        if not displaced then
+            savedCF = hrp.CFrame
+            displaced = true
+        end
         hrp.CFrame = CFrame.lookAt(orbitPos, Vector3.new(center.X, orbitPos.Y, center.Z))
         hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         if serverMarker and C.ServerPos then
@@ -1085,7 +1092,17 @@ pcall(function() VIM = game:GetService("VirtualInputManager") end)
 local function fireClick()
     if typeof(mouse1click) == "function" then
         pcall(mouse1click)
-    elseif typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+        return
+    end
+    -- Mobile/universal fallback: activate the held tool directly (melee swings,
+    -- most guns). mouse-button synthesis often does nothing on touch devices.
+    local ch = LocalPlayer.Character
+    local tool = ch and ch:FindFirstChildOfClass("Tool")
+    if tool then
+        pcall(function() tool:Activate() end)
+        return
+    end
+    if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
         pcall(mouse1press)
         task.delay(0.05, function() pcall(mouse1release) end)
     elseif VIM then
@@ -1099,11 +1116,15 @@ end
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
-        -- C-sync restore FIRST: show yourself walking freely before render
-        if savedCF then
+        -- C-sync restore FIRST: show yourself walking freely before render.
+        -- Runs whenever displaced, even if strafe was just toggled off, so you
+        -- can never get stuck at the orbit point.
+        if displaced and savedCF then
             local char = LocalPlayer.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if hrp then hrp.CFrame = savedCF end
+            displaced = false
+            savedCF = nil
         end
         local cam = workspace.CurrentCamera
         if not cam then return end
