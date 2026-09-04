@@ -246,7 +246,7 @@
             local og_size = frame.Size  
 
             Frame.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                     resizing = true
                     start = input.Position
                     start_size = frame.Size
@@ -254,13 +254,13 @@
             end)
 
             Frame.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                     resizing = false
                 end
             end)
 
             library:connection(uis.InputChanged, function(input, game_event) 
-                if resizing and input.UserInputType == Enum.UserInputType.MouseMovement then
+                if resizing and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
                     local viewport_x = camera.ViewportSize.X
                     local viewport_y = camera.ViewportSize.Y
 
@@ -302,7 +302,7 @@
             local start 
 
             frame.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                     dragging = true
                     start = input.Position
                     start_size = frame.Position
@@ -310,13 +310,13 @@
             end)
 
             frame.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                     dragging = false
                 end
             end)
 
             library:connection(uis.InputChanged, function(input, game_event) 
-                if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                if dragging and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
                     local viewport_x = camera.ViewportSize.X
                     local viewport_y = camera.ViewportSize.Y
 
@@ -1259,7 +1259,7 @@
                 self.selected_tab = {e, accent, split}
             end
 
-            button.MouseButton1Down:Connect(function()
+            button.Activated:Connect(function()
                 cfg.open_tab()
             end)
 
@@ -1578,7 +1578,7 @@
                 --
 
                 -- Connections
-                    toggle.MouseButton1Click:Connect(function()
+                    toggle.Activated:Connect(function()
                         cfg.enabled = not cfg.enabled 
                         cfg.set(cfg.enabled)
                     end)
@@ -1722,22 +1722,24 @@
                 -- 
 
                 -- Connections
-                    slider_frame.MouseButton1Down:Connect(function()
-                        cfg.dragging = true 
+                    slider_frame.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            cfg.dragging = true
+                        end
                     end)
 
-                    minus.MouseButton1Down:Connect(function()
+                    minus.Activated:Connect(function()
                         cfg.value -= cfg.intervals
                         cfg.set(cfg.value)
                     end)
 
-                    plus.MouseButton1Down:Connect(function()
+                    plus.Activated:Connect(function()
                         cfg.value += cfg.intervals
                         cfg.set(cfg.value)
                     end)
 
                     library:connection(uis.InputChanged, function(input)
-                        if cfg.dragging and input.UserInputType == Enum.UserInputType.MouseMovement then 
+                        if cfg.dragging and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then 
                             local size_x = (input.Position.X - slider_frame.AbsolutePosition.X) / slider_frame.AbsoluteSize.X
                             local value = ((cfg.max - cfg.min) * size_x) + cfg.min
 
@@ -1746,7 +1748,7 @@
                     end)
 
                     library:connection(uis.InputEnded, function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                             cfg.dragging = false 
                         end 
                     end)
@@ -1970,7 +1972,7 @@
 
                             insert(cfg.option_instances, button)
                             
-                            button.MouseButton1Down:Connect(function()
+                            button.Activated:Connect(function()
                                 if cfg.multi then 
                                     local selected_index = find(cfg.multi_items, button.Text)
         
@@ -1999,7 +2001,7 @@
                 -- 
 
                 -- Connections 
-                    dropdown_holder.MouseButton1Click:Connect(function()
+                    dropdown_holder.Activated:Connect(function()
                         cfg.open = not cfg.open 
                         
                         items.Size = dim2(0, dropdown_holder.AbsoluteSize.X, 0, items.Size.Y.Offset)
@@ -2009,7 +2011,7 @@
                     end)
                     
                     library:connection(uis.InputEnded, function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                             if not (library:mouse_in_frame(items) or library:mouse_in_frame(dropdown_holder)) then 
                                 cfg.open = false
                                 cfg.set_visible(false)
@@ -2101,7 +2103,7 @@
 
                             insert(cfg.option_instances, button)
                             
-                            button.MouseButton1Down:Connect(function()
+                            button.Activated:Connect(function()
                                 if cfg.multi then 
                                     local selected_index = find(cfg.multi_items, button.Text)
         
@@ -2130,7 +2132,7 @@
                 -- 
 
                 -- Connections 
-                    dropdown_holder.MouseButton1Click:Connect(function()
+                    dropdown_holder.Activated:Connect(function()
                         cfg.open = not cfg.open 
                         
                         items.Size = dim2(0, dropdown_holder.AbsoluteSize.X, 0, items.Size.Y.Offset)
@@ -2140,7 +2142,7 @@
                     end)
                     
                     library:connection(uis.InputEnded, function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                             if not (library:mouse_in_frame(items) or library:mouse_in_frame(dropdown_holder)) then 
                                 cfg.open = false
                                 cfg.set_visible(false)
@@ -2492,20 +2494,20 @@
                 -- 
                 
                 -- Connections 
-                    colorpicker_element.MouseButton1Click:Connect(function()
+                    colorpicker_element.Activated:Connect(function()
                         cfg.open = not cfg.open 
 
                         cfg.set_visible(cfg.open)            
                     end)
 
                     uis.InputChanged:Connect(function(input)
-                        if (dragging_sat or dragging_hue or dragging_alpha) and input.UserInputType == Enum.UserInputType.MouseMovement then
+                        if (dragging_sat or dragging_hue or dragging_alpha) and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
                             cfg.update_color() 
                         end
                     end)
 
                     library:connection(uis.InputEnded, function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                             dragging_sat = false
                             dragging_hue = false
                             dragging_alpha = false  
@@ -2517,17 +2519,22 @@
                         end
                     end)
 
-                    alpha_button.MouseButton1Down:Connect(function()
-                        dragging_alpha = true 
+                    alpha_button.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            dragging_alpha = true
+                        end
                     end)
                     
-                    hue_button.MouseButton1Down:Connect(function()
-                        dragging_hue = true 
+                    hue_button.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            dragging_hue = true
+                        end
                     end)
                     
-                    saturation_button.MouseButton1Down:Connect(function()
-                        print("hiu")
-                        dragging_sat = true  
+                    saturation_button.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            dragging_sat = true
+                        end
                     end)
                     
                     textbox.FocusLost:Connect(function()
@@ -2751,7 +2758,7 @@
                                 BackgroundColor3 = rgb(255, 255, 255)
                             }); cfg.hold_instances[v] = option
 
-                            option.MouseButton1Click:Connect(function()
+                            option.Activated:Connect(function()
                                 cfg.set(v)
 
                                 --cfg.modify_mode_color(v)
@@ -2872,7 +2879,8 @@
                 -- 
                 
                 -- Connections
-                    keybind_element.MouseButton1Down:Connect(function()
+                    keybind_element.InputBegan:Connect(function(input)
+                        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
                         task.wait()
                         toggle_text.Text = "..."	
 
@@ -2916,7 +2924,7 @@
                             end
                         end
 
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                             if not (library:mouse_in_frame(keybind_element) or library:mouse_in_frame(item_holder)) then 
                                 cfg.open = false
                                 cfg.set_visible(false)
@@ -2982,7 +2990,7 @@
                 -- 
 
                 -- Connections 
-                    text.MouseButton1Click:Connect(function()
+                    text.Activated:Connect(function()
                         cfg.callback()
                     end)
                 --
