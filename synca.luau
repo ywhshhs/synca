@@ -19,6 +19,9 @@ local C = {
     Smoothness = 10,
     PredictionEnabled = false,
     Prediction = 5,
+    Triggerbot = false,
+    TriggerDelay = 0.1,
+    TriggerLock = true,
     TargetPart = "Head",
     Highlight = false,
     HighlightColor = Color3.fromRGB(255, 60, 60),
@@ -325,6 +328,19 @@ AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suf
     C.Prediction = Value
 end})
 
+-- Triggerbot: clicks when the cursor sits on a valid enemy
+AdvancedSection:Toggle({Name = "Triggerbot", Flag = "Triggerbot", Default = false, Callback = function(Value)
+    C.Triggerbot = Value
+end})
+
+AdvancedSection:Slider({Name = "Trigger Delay", Min = 0, Max = 1, Default = 0.1, Suffix = "s", Decimals = 2, Flag = "TriggerDelay", Callback = function(Value)
+    C.TriggerDelay = Value
+end})
+
+AdvancedSection:Toggle({Name = "Require Lock", Flag = "TriggerLock", Default = true, Callback = function(Value)
+    C.TriggerLock = Value
+end})
+
 local MiscSection = CombatTab:Section({Name = "Movement", Side = 2})
 
 -- Desync: the server replicates a frozen/spinning body while you walk freely.
@@ -489,6 +505,7 @@ local AIMBOT = {
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local UIS = game:GetService("UserInputService")
+local LOCAL_MOUSE = LocalPlayer:GetMouse()
 
 -- FOV anchor point: screen center, or live cursor/touch position
 local function getFovCenter()
@@ -1270,6 +1287,34 @@ RSVC.Heartbeat:Connect(function(dt)
     desyncPlaceAnchor(dt)
 end)
 
+-- Triggerbot click: executor press first, held-tool fallback for touch.
+-- Non-blocking (release is deferred) so the render loop never yields.
+local triggerArmedAt = nil
+local function triggerFire()
+    if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+        pcall(mouse1press)
+        task.delay(0.05, function() pcall(mouse1release) end)
+        return
+    end
+    local ch = LocalPlayer.Character
+    local tool = ch and ch:FindFirstChildOfClass("Tool")
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+end
+
+local function resolveTriggerTarget()
+    local ok, hit = pcall(function() return LOCAL_MOUSE.Target end)
+    if not ok or not hit then return nil end
+    local model = hit:FindFirstAncestorOfClass("Model")
+    if not model then return nil end
+    local player = Players:GetPlayerFromCharacter(model)
+    if not player or player == LocalPlayer then return nil end
+    if not isValidTarget(player) then return nil end
+    if C.TriggerLock and AIMBOT.Target ~= player then return nil end
+    return player
+end
+
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
@@ -1365,6 +1410,22 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
             ringColor = C.LockedColor
         end
         fovCircle.Color = ringColor
+
+        -- Triggerbot: arm while the cursor rests on a valid enemy, fire once
+        -- the delay elapses. Re-arms per shot; gated on the master switch.
+        if C.Triggerbot and C.Enable then
+            if resolveTriggerTarget() then
+                if triggerArmedAt == nil then triggerArmedAt = os.clock() end
+                if os.clock() - triggerArmedAt >= C.TriggerDelay then
+                    triggerArmedAt = nil
+                    triggerFire()
+                end
+            else
+                triggerArmedAt = nil
+            end
+        else
+            triggerArmedAt = nil
+        end
     end)
 end)
 
