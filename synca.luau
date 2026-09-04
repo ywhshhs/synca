@@ -19,8 +19,7 @@ local C = {
     Smoothness = 10,
     PredictionEnabled = false,
     Prediction = 5,
-    Tracer = false,
-    TracerOrigin = "Cursor",
+    TargetPart = "Head",
     Highlight = false,
     HighlightColor = Color3.fromRGB(255, 60, 60),
     HighlightOpacity = 50,
@@ -35,21 +34,12 @@ local C = {
     ESPTracer = false,
     ESPTracerColor = Color3.fromRGB(255, 255, 255),
     ESPTracerOrigin = "Bottom",
-    StickyLock = true,
     BoxStyle = "Box",
     BoxOutline = false,
     HealthNumber = false,
     Skeleton = false,
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     ESPMaxDistance = 0,
-    TargetOnly = false,
-    TargetPlayer = "",
-    Strafe = false,
-    StrafeRadius = 12,
-    StrafeSpeed = 120,
-    StrafeHeight = 0,
-    ServerPos = false,
-    ServerPosColor = Color3.fromRGB(0, 255, 0),
 }
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
@@ -73,56 +63,6 @@ pcall(function()
     fovCircle.Radius = 100
 end)
 
--- Crosshair: "Cross" is NOT a valid Drawing type (valid: Line, Circle, Square,
--- Text, Image, Triangle), so Drawing.new("Cross") returns an error string ->
--- line 26 crash. Build crosshair from two Lines instead, with pcall guards
--- so mobile executors without Drawing support don't crash at all.
-local crossH, crossV
-pcall(function()
-    crossH = Drawing.new("Line")
-    crossH.Visible = false
-    crossH.Thickness = 1
-    crossH.Color = Color3.fromRGB(166, 147, 243)
-    crossH.Transparency = 0.7
-    crossV = Drawing.new("Line")
-    crossV.Visible = false
-    crossV.Thickness = 1
-    crossV.Color = Color3.fromRGB(166, 147, 243)
-    crossV.Transparency = 0.7
-end)
-local function setCrosshair(visible, x, y)
-    pcall(function()
-        if crossH and crossV then
-            crossH.Visible = visible
-            crossV.Visible = visible
-            if x and y then
-                crossH.From = Vector2.new(x - 7, y)
-                crossH.To = Vector2.new(x + 7, y)
-                crossV.From = Vector2.new(x, y - 7)
-                crossV.To = Vector2.new(x, y + 7)
-            end
-        end
-    end)
-end
-
--- Target tracer line (origin -> targeted part), pcall-guarded for executors
--- without Drawing support.
-local tracerLine
-do
-    local ok, obj = pcall(function() return Drawing.new("Line") end)
-    if ok and obj and typeof(obj) ~= "string" then
-        tracerLine = obj
-    else
-        tracerLine = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
-    end
-end
-pcall(function()
-    tracerLine.Visible = false
-    tracerLine.Thickness = 1
-    tracerLine.Color = Color3.fromRGB(166, 147, 243)
-    tracerLine.Transparency = 0.8
-end)
-
 -- FOV fill disc (outline circle stays separate so both keep own opacity)
 local fovFill
 do
@@ -139,25 +79,6 @@ pcall(function()
     fovFill.Color = Color3.fromRGB(166, 147, 243)
     fovFill.Transparency = 0.2
     fovFill.Radius = 100
-end)
-
--- Server-position ghost: client-only marker showing where the SERVER sees you
--- while strafing (the orbit point). Purely visual, never replicates/collides.
-local serverMarker = nil
-pcall(function()
-    local p = Instance.new("Part")
-    p.Name = "SyncaServerPos"
-    p.Anchored = true
-    p.CanCollide = false
-    p.CanQuery = false
-    p.CanTouch = false
-    p.Transparency = 1
-    p.Material = Enum.Material.Neon
-    p.Color = Color3.fromRGB(0, 255, 0)
-    p.Size = Vector3.new(3, 5, 2)
-    p.CFrame = CFrame.new(0, -100, 0)
-    p.Parent = workspace
-    serverMarker = p
 end)
 
 -- True only when the executor really supports Drawing (dummy fallback tables
@@ -179,7 +100,6 @@ local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 -- Sections
 local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
 local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = 2})
-local TargetSection = CombatTab:Section({Name = "Target", Side = 2})
 local ESPSection = VisualsTab:Section({Name = "ESP", Side = 1})
 
 -- Enable toggle with keybind chained on
@@ -252,6 +172,11 @@ AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, 
     C.WallCheck = Value
 end})
 
+-- Targeted part (aliases resolve on both R6 and R15, see PART_ALIASES)
+AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "Head", Items = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}, Callback = function(Value)
+    C.TargetPart = Value
+end})
+
 -- Target highlight: one Highlight on the whole character model (every part)
 AimbotSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
     C.Highlight = Value
@@ -276,84 +201,6 @@ end})
 -- Prediction slider
 AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
     C.Prediction = Value
-end})
-
--- Target tracer: line from origin to the currently targeted part
-TargetSection:Toggle({Name = "Sticky Lock", Flag = "StickyLock", Default = true, Callback = function(Value)
-    C.StickyLock = Value
-end})
-
-TargetSection:Toggle({Name = "Target Tracer", Flag = "Tracer", Default = false, Callback = function(Value)
-    C.Tracer = Value
-end}):Colorpicker({Name = "Tracer Color", Flag = "Tracer Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
-    if tracerLine and typeof(Value) == "Color3" then
-        tracerLine.Color = Value
-    end
-end})
-
-TargetSection:Dropdown({Name = "Tracer Origin", Flag = "TracerOrigin", Default = "Cursor", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
-    C.TracerOrigin = Value
-end})
-
--- Target menu: lock onto ONE player, ignore everyone else
-TargetSection:Toggle({Name = "Target Only", Flag = "TargetOnly", Default = false, Callback = function(Value)
-    C.TargetOnly = Value
-end})
-
-local function playerNames()
-    local Svc = game:GetService("Players")
-    local lp = Svc.LocalPlayer
-    local names = {}
-    for _, p in ipairs(Svc:GetPlayers()) do
-        if p ~= lp then table.insert(names, p.Name) end
-    end
-    table.sort(names)
-    return names
-end
-
-local targetList = TargetSection:Listbox({Name = "Target", Flag = "SelectedTarget", Items = playerNames(), Size = 120, Callback = function(Value)
-    C.TargetPlayer = (type(Value) == "table" and Value[1]) or Value or ""
-end})
-
-TargetSection:Button({Name = "Refresh Targets", Callback = function()
-    local names = playerNames()
-    pcall(function() targetList:Refresh(names) end)
-    if C.TargetPlayer ~= "" and not table.find(names, C.TargetPlayer) then
-        C.TargetPlayer = ""
-    end
-end})
-
-game:GetService("Players").PlayerAdded:Connect(function()
-    pcall(function() targetList:Refresh(playerNames()) end)
-end)
-
-game:GetService("Players").PlayerRemoving:Connect(function(p)
-    pcall(function() targetList:Refresh(playerNames()) end)
-    if C.TargetPlayer == p.Name then C.TargetPlayer = "" end
-end)
-
--- C-sync strafe: orbit the selected/locked target on the server while you
--- keep walking freely on your screen. Pair with Target Only + Auto Fire.
-TargetSection:Toggle({Name = "Strafe Target", Flag = "Strafe", Default = false, Callback = function(Value)
-    C.Strafe = Value
-end})
-
-TargetSection:Slider({Name = "Strafe Radius", Min = 5, Max = 30, Default = 12, Suffix = " studs", Decimals = 1, Flag = "StrafeRadius", Callback = function(Value)
-    C.StrafeRadius = Value
-end})
-
-TargetSection:Slider({Name = "Strafe Speed", Min = 10, Max = 360, Default = 120, Suffix = " deg/s", Decimals = 1, Flag = "StrafeSpeed", Callback = function(Value)
-    C.StrafeSpeed = Value
-end})
-
-TargetSection:Slider({Name = "Strafe Height", Min = -5, Max = 10, Default = 0, Suffix = " studs", Decimals = 1, Flag = "StrafeHeight", Callback = function(Value)
-    C.StrafeHeight = Value
-end})
-
-TargetSection:Toggle({Name = "Server Position", Flag = "ServerPos", Default = false, Callback = function(Value)
-    C.ServerPos = Value
-end}):Colorpicker({Name = "Server Color", Flag = "Server Color", Default = Color3.fromRGB(0, 255, 0), Callback = function(Value, Alpha)
-    if typeof(Value) == "Color3" then C.ServerPosColor = Value end
 end})
 
 -- Full ESP suite (everyone passing the Team Check filter)
@@ -467,13 +314,30 @@ local function isValidTarget(player)
     return true
 end
 
--- Aim point is always the Head (isValidTarget already guarantees it exists).
+-- R6 + R15 part resolver: each dropdown option maps to its R6 name first,
+-- then the R15 equivalent. Falls back to Head so a missing part never breaks
+-- targeting.
+local PART_ALIASES = {
+    ["Head"] = {"Head"},
+    ["HumanoidRootPart"] = {"HumanoidRootPart"},
+    ["Torso"] = {"Torso", "UpperTorso"},
+    ["Left Arm"] = {"Left Arm", "LeftUpperArm"},
+    ["Right Arm"] = {"Right Arm", "RightUpperArm"},
+    ["Left Leg"] = {"Left Leg", "LeftUpperLeg"},
+    ["Right Leg"] = {"Right Leg", "RightUpperLeg"},
+}
+
 local function getAimPart(player)
     local char = player and player.Character
     if not char then return nil, nil end
+    local aliases = PART_ALIASES[C.TargetPart] or PART_ALIASES["Head"]
+    for _, name in ipairs(aliases) do
+        local part = char:FindFirstChild(name)
+        if part then return part.Position, part end
+    end
     local head = char:FindFirstChild("Head")
-    if not head then return nil, nil end
-    return head.Position, head
+    if head then return head.Position, head end
+    return nil, nil
 end
 
 -- Wall check must ignore the TARGET's own body too: the old version only
@@ -522,18 +386,6 @@ end
 local function findClosestTarget()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
-    -- Target Only: ignore everyone except the selected listbox player
-    if C.TargetOnly then
-        if C.TargetPlayer == "" then return nil end
-        local only = Players:FindFirstChild(C.TargetPlayer)
-        if not only or not isValidTarget(only) then return nil end
-        local opos, opart = getAimPart(only)
-        if not opos then return nil end
-        if not isInFOV(opos) then return nil end
-        if not canSeeTarget(opos, only) then return nil end
-        AIMBOT.TargetPart = opart
-        return only
-    end
     local closest = nil
     local closestDist = math.huge
     for _, player in pairs(Players:GetPlayers()) do
@@ -557,7 +409,6 @@ end
 local function isLockValid(target)
     if not target then return false end
     if not isValidTarget(target) then return false end
-    if C.TargetOnly and (C.TargetPlayer == "" or target.Name ~= C.TargetPlayer) then return false end
     local cam = workspace.CurrentCamera
     if not cam then return false end
     local pos, _ = getAimPart(target)
@@ -994,71 +845,9 @@ Players.PlayerRemoving:Connect(function(player)
     clearEspEntry(player)
 end)
 
--- C-sync strafe engine: on Heartbeat (post-physics, pre-replication) teleport
--- to the orbit point so the SERVER replicates you circling the target; on
--- RenderStepped (pre-render) restore your real CFrame so YOU keep walking
--- freely on your screen. Works where the client owns character physics.
-local RunService = game:GetService("RunService")
-local strafeAngle = 0
-local savedCF = nil
-local displaced = false
-
-local function getStrafeTarget()
-    if not C.Strafe then return nil end
-    local p = nil
-    if C.TargetPlayer ~= "" then
-        p = Players:FindFirstChild(C.TargetPlayer)
-    else
-        p = AIMBOT.Target
-    end
-    if not p or not isValidTarget(p) then return nil end
-    return p
-end
-
-RunService.Heartbeat:Connect(function(dt)
-    pcall(function()
-        if serverMarker then serverMarker.Transparency = 1 end
-        if not C.Strafe then return end
-        local t = getStrafeTarget()
-        if not t then return end
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local thc = t.Character
-        local thrp = thc and thc:FindFirstChild("HumanoidRootPart")
-        if not hrp or not thrp then return end
-        strafeAngle += math.rad(C.StrafeSpeed) * (dt or 0.016)
-        local center = thrp.Position + Vector3.new(0, C.StrafeHeight, 0)
-        local orbitPos = center + Vector3.new(math.cos(strafeAngle) * C.StrafeRadius, 0, math.sin(strafeAngle) * C.StrafeRadius)
-        -- Only snapshot when not already displaced: a second Heartbeat before
-        -- the next render must NOT overwrite the real position with the orbit
-        -- one (that collapse is what left users stuck following the target).
-        if not displaced then
-            savedCF = hrp.CFrame
-            displaced = true
-        end
-        hrp.CFrame = CFrame.lookAt(orbitPos, Vector3.new(center.X, orbitPos.Y, center.Z))
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        if serverMarker and C.ServerPos then
-            serverMarker.Color = C.ServerPosColor
-            serverMarker.CFrame = hrp.CFrame
-            serverMarker.Transparency = 0.5
-        end
-    end)
-end)
-
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
 game:GetService("RunService").RenderStepped:Connect(function(dt)
     pcall(function()
-        -- C-sync restore FIRST: show yourself walking freely before render.
-        -- Runs whenever displaced, even if strafe was just toggled off, so you
-        -- can never get stuck at the orbit point.
-        if displaced and savedCF then
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame = savedCF end
-            displaced = false
-            savedCF = nil
-        end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local anchor = getFovCenter()
@@ -1074,34 +863,6 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         -- Update FOV visualization (follows the master Enable switch)
         fovCircle.Visible = C.FOV and C.Enable
         fovFill.Visible = C.FOV and C.FOVFilled and C.Enable
-        setCrosshair(C.Enable, anchor.X, anchor.Y)
-
-        -- Target tracer: draw origin -> live target part position
-        local traceFrom, traceTo = nil, nil
-        if C.Tracer and C.Enable and AIMBOT.Target then
-            local tPos, _ = getAimPart(AIMBOT.Target)
-            if tPos then
-                local sp, onScreen = cam:WorldToViewportPoint(tPos)
-                if onScreen then
-                    traceTo = Vector2.new(sp.X, sp.Y)
-                    if C.TracerOrigin == "Bottom" then
-                        traceFrom = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
-                    elseif C.TracerOrigin == "Top" then
-                        traceFrom = Vector2.new(cam.ViewportSize.X / 2, 0)
-                    else
-                        local okm, mp = pcall(function() return UIS:GetMouseLocation() end)
-                        if okm and mp then traceFrom = Vector2.new(mp.X, mp.Y) end
-                    end
-                end
-            end
-        end
-        if traceFrom and traceTo then
-            tracerLine.Visible = true
-            tracerLine.From = traceFrom
-            tracerLine.To = traceTo
-        else
-            tracerLine.Visible = false
-        end
 
         updateHighlight()
         updateESP(dt)
@@ -1111,11 +872,7 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         -- frame (that re-picking was the tug-of-war). The lock drops when the
         -- target dies, hides, or leaves the FOV/screen — look away to release.
         if C.Enable then
-            if C.StickyLock then
-                if not isLockValid(AIMBOT.Lock) then
-                    AIMBOT.Lock = findClosestTarget()
-                end
-            else
+            if not isLockValid(AIMBOT.Lock) then
                 AIMBOT.Lock = findClosestTarget()
             end
             AIMBOT.Target = AIMBOT.Lock
