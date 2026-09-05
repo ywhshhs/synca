@@ -42,6 +42,15 @@ local C = {
     Skeleton = false,
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     ESPMaxDistance = 0,
+    FillRainbow = false,
+    FillPulse = false,
+    OutlineColor = Color3.fromRGB(0, 0, 0),
+    OutlineOpacity = 100,
+    OutlineRainbow = false,
+    NameColor = Color3.fromRGB(255, 255, 255),
+    DistanceColor = Color3.fromRGB(255, 255, 255),
+    HealthNumberColor = Color3.fromRGB(255, 255, 255),
+    ESPSmoothing = 18,
     Priority = "Closest",
     Deadzone = 2,
     Humanize = 0,
@@ -92,6 +101,24 @@ local C = {
 
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
 -- so fovCircle must already exist or launch throws "attempt to index nil")
+-- Creation order = draw order: the outline ring is created FIRST so it sits
+-- behind the main ring (a same-size ring created later would cover it).
+local fovOutline
+pcall(function()
+    fovOutline = Drawing.new("Circle")
+end)
+if fovOutline == nil or typeof(fovOutline) == "string" then
+    fovOutline = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
+end
+pcall(function()
+    fovOutline.Visible = false
+    fovOutline.Filled = false
+    fovOutline.NumSides = 64
+    fovOutline.Color = Color3.fromRGB(0, 0, 0)
+    fovOutline.Transparency = 1
+    fovOutline.Radius = 100
+end)
+
 local fovCircle
 do
     local ok, obj = pcall(function() return Drawing.new("Circle") end)
@@ -129,23 +156,6 @@ pcall(function()
     fovFill.Color = Color3.fromRGB(166, 147, 243)
     fovFill.Transparency = 0.2
     fovFill.Radius = 100
-end)
-
--- FOV outline ring (dark backing behind the main ring)
-local fovOutline
-pcall(function()
-    fovOutline = Drawing.new("Circle")
-end)
-if fovOutline == nil or typeof(fovOutline) == "string" then
-    fovOutline = setmetatable({}, { __index = function() return nil end, __newindex = function() end })
-end
-pcall(function()
-    fovOutline.Visible = false
-    fovOutline.Filled = false
-    fovOutline.NumSides = 64
-    fovOutline.Color = Color3.fromRGB(0, 0, 0)
-    fovOutline.Transparency = 1
-    fovOutline.Radius = 100
 end)
 
 -- Screen-center crosshair overlay (4 lines + dot)
@@ -200,8 +210,17 @@ local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
 -- Sections
 local AimbotSection = CombatTab:Section({Name = "Aimbot", Side = 1})
-local AdvancedSection = CombatTab:Section({Name = "Advanced", Side = 2})
+local FOVSection = CombatTab:Section({Name = "Field of View", Side = 1})
+local TargetSection = CombatTab:Section({Name = "Target", Side = 1})
+local SmoothSection = CombatTab:Section({Name = "Smoothing", Side = 2})
+local PredictSection = CombatTab:Section({Name = "Prediction", Side = 2})
+local TriggerSection = CombatTab:Section({Name = "Triggerbot", Side = 2})
 local ESPSection = VisualsTab:Section({Name = "ESP", Side = 1})
+local HealthSection = VisualsTab:Section({Name = "Health", Side = 1})
+local TextSection = VisualsTab:Section({Name = "Text", Side = 1})
+local TracerSection = VisualsTab:Section({Name = "Tracers", Side = 2})
+local SkeletonSection = VisualsTab:Section({Name = "Skeleton", Side = 2})
+local PerfSection = VisualsTab:Section({Name = "Performance", Side = 2})
 
 -- Enable toggle with keybind chained on
 AimbotSection:Toggle({Name = "Enable", Flag = "Enable", Default = false, Callback = function(Value)
@@ -222,7 +241,7 @@ end})
 
 -- FOV toggle + colorpickers (separate statements: Colorpicker() returns the
 -- picker extension, not the toggle, so chaining a second picker would error)
-local FoVToggle = AimbotSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
+local FoVToggle = FOVSection:Toggle({Name = "FoV", Flag = "FOV", Default = false, Callback = function(Value)
     C.FOV = Value
     if fovCircle then
         fovCircle.Visible = Value
@@ -239,45 +258,64 @@ FoVToggle:Colorpicker({Name = "Locked Color", Flag = "Locked Color", Default = C
 end})
 
 -- FOV Size slider (fires immediately at creation, so nil-guard fovCircle)
-AimbotSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 1, Flag = "FOVSize", Callback = function(Value)
+FOVSection:Slider({Name = "FoV Size", Min = 10, Max = 300, Default = 100, Suffix = " px", Decimals = 1, Flag = "FOVSize", Callback = function(Value)
     C.FOVSize = Value
     if fovCircle then
         fovCircle.Radius = Value
     end
 end})
 
-AimbotSection:Slider({Name = "FoV Opacity", Min = 0, Max = 100, Default = 40, Suffix = "%", Decimals = 1, Flag = "FOVOpacity", Callback = function(Value)
+FOVSection:Slider({Name = "FoV Opacity", Min = 0, Max = 100, Default = 40, Suffix = "%", Decimals = 1, Flag = "FOVOpacity", Callback = function(Value)
     C.FOVOpacity = Value
 end})
 
-AimbotSection:Toggle({Name = "FoV Filled", Flag = "FOVFilled", Default = false, Callback = function(Value)
+FOVSection:Toggle({Name = "FoV Filled", Flag = "FOVFilled", Default = false, Callback = function(Value)
     C.FOVFilled = Value
 end}):Colorpicker({Name = "Fill Color", Flag = "FOV Fill Color", Default = Color3.fromRGB(166, 147, 243), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.FOVFillColor = Value end
 end})
 
-AimbotSection:Slider({Name = "Fill Opacity", Min = 0, Max = 100, Default = 20, Suffix = "%", Decimals = 1, Flag = "FOVFillOpacity", Callback = function(Value)
+FOVSection:Slider({Name = "Fill Opacity", Min = 0, Max = 100, Default = 20, Suffix = "%", Decimals = 1, Flag = "FOVFillOpacity", Callback = function(Value)
     C.FOVFillOpacity = Value
 end})
 
-AimbotSection:Slider({Name = "FoV Thickness", Min = 1, Max = 5, Default = 2, Suffix = "px", Decimals = 1, Flag = "FOVThickness", Callback = function(Value)
+FOVSection:Toggle({Name = "Fill Rainbow", Flag = "FillRainbow", Default = false, Callback = function(Value)
+    C.FillRainbow = Value
+end})
+
+FOVSection:Toggle({Name = "Fill Pulse", Flag = "FillPulse", Default = false, Callback = function(Value)
+    C.FillPulse = Value
+end})
+
+FOVSection:Slider({Name = "FoV Thickness", Min = 1, Max = 5, Default = 2, Suffix = "px", Decimals = 1, Flag = "FOVThickness", Callback = function(Value)
     C.FOVThickness = Value
 end})
 
-AimbotSection:Toggle({Name = "FoV Outline", Flag = "FOVOutline", Default = false, Callback = function(Value)
+local OutlineToggle = FOVSection:Toggle({Name = "FoV Outline", Flag = "FOVOutline", Default = false, Callback = function(Value)
     C.FOVOutline = Value
 end})
+OutlineToggle:Colorpicker({Name = "Outline Color", Flag = "Outline Color", Default = Color3.fromRGB(0, 0, 0), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.OutlineColor = Value end
+end})
 
-AimbotSection:Toggle({Name = "FoV Rainbow", Flag = "FoVRainbow", Default = false, Callback = function(Value)
+FOVSection:Slider({Name = "Outline Opacity", Min = 0, Max = 100, Default = 100, Suffix = "%", Decimals = 1, Flag = "OutlineOpacity", Callback = function(Value)
+    C.OutlineOpacity = Value
+end})
+
+FOVSection:Toggle({Name = "Outline Rainbow", Flag = "OutlineRainbow", Default = false, Callback = function(Value)
+    C.OutlineRainbow = Value
+end})
+
+FOVSection:Toggle({Name = "FoV Rainbow", Flag = "FoVRainbow", Default = false, Callback = function(Value)
     C.FoVRainbow = Value
 end})
 
-AimbotSection:Slider({Name = "Rainbow Speed", Min = 1, Max = 10, Default = 2, Suffix = "s", Decimals = 1, Flag = "RainbowSpeed", Callback = function(Value)
+FOVSection:Slider({Name = "Rainbow Speed", Min = 1, Max = 10, Default = 2, Suffix = "s", Decimals = 1, Flag = "RainbowSpeed", Callback = function(Value)
     C.RainbowSpeed = Value
 end})
 
 -- FOV anchor: locked to screen center, or follows the cursor/touch point
-AimbotSection:Dropdown({Name = "FoV Position", Flag = "FOVMode", Default = "Center", Items = {"Center", "Cursor"}, Callback = function(Value)
+FOVSection:Dropdown({Name = "FoV Position", Flag = "FOVMode", Default = "Center", Items = {"Center", "Cursor"}, Callback = function(Value)
     C.FOVMode = Value
 end})
 
@@ -287,7 +325,7 @@ AimbotSection:Toggle({Name = "Wall Check", Flag = "WallCheck", Default = false, 
 end})
 
 -- Targeted part (aliases resolve on both R6 and R15, see PART_ALIASES)
-AimbotSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "Head", Items = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}, Callback = function(Value)
+TargetSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "Head", Items = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}, Callback = function(Value)
     C.TargetPart = Value
 end})
 
@@ -302,96 +340,96 @@ AimbotSection:Dropdown({Name = "Aim Method", Flag = "AimMethod", Default = "Came
 end})
 
 -- Target highlight: one Highlight on the whole character model (every part)
-AimbotSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
+TargetSection:Toggle({Name = "Target Highlight", Flag = "Highlight", Default = false, Callback = function(Value)
     C.Highlight = Value
 end}):Colorpicker({Name = "Highlight Color", Flag = "Highlight Color", Default = Color3.fromRGB(255, 60, 60), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.HighlightColor = Value end
 end})
 
-AimbotSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "HighlightOpacity", Callback = function(Value)
+TargetSection:Slider({Name = "Highlight Opacity", Min = 0, Max = 100, Default = 50, Suffix = "%", Decimals = 1, Flag = "HighlightOpacity", Callback = function(Value)
     C.HighlightOpacity = Value
 end})
 
 -- Target Dot: ring on the locked aim point itself
-AimbotSection:Toggle({Name = "Target Dot", Flag = "TargetDot", Default = false, Callback = function(Value)
+TargetSection:Toggle({Name = "Target Dot", Flag = "TargetDot", Default = false, Callback = function(Value)
     C.TargetDot = Value
 end})
 
-AimbotSection:Slider({Name = "Target Size", Min = 2, Max = 12, Default = 6, Suffix = "px", Decimals = 1, Flag = "TargetDotSize", Callback = function(Value)
+TargetSection:Slider({Name = "Target Size", Min = 2, Max = 12, Default = 6, Suffix = "px", Decimals = 1, Flag = "TargetDotSize", Callback = function(Value)
     C.TargetDotSize = Value
 end})
 
-AimbotSection:Toggle({Name = "Target Filled", Flag = "TargetDotFilled", Default = true, Callback = function(Value)
+TargetSection:Toggle({Name = "Target Filled", Flag = "TargetDotFilled", Default = true, Callback = function(Value)
     C.TargetDotFilled = Value
 end})
 
 -- Smoothness slider
-AdvancedSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
+SmoothSection:Slider({Name = "Smoothness", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "Smoothness", Callback = function(Value)
     C.Smoothness = Value
 end})
 
-AdvancedSection:Slider({Name = "Aim Deadzone", Min = 0, Max = 20, Default = 2, Suffix = "px", Decimals = 1, Flag = "Deadzone", Callback = function(Value)
+SmoothSection:Slider({Name = "Aim Deadzone", Min = 0, Max = 20, Default = 2, Suffix = "px", Decimals = 1, Flag = "Deadzone", Callback = function(Value)
     C.Deadzone = Value
 end})
 
-AdvancedSection:Slider({Name = "Humanize", Min = 0, Max = 10, Default = 0, Suffix = "", Decimals = 1, Flag = "Humanize", Callback = function(Value)
+SmoothSection:Slider({Name = "Humanize", Min = 0, Max = 10, Default = 0, Suffix = "", Decimals = 1, Flag = "Humanize", Callback = function(Value)
     C.Humanize = Value
 end})
 
 -- Prediction toggle (no more resetting the slider to 0)
-AdvancedSection:Toggle({Name = "Enable Prediction", Flag = "PredictionEnabled", Default = false, Callback = function(Value)
+PredictSection:Toggle({Name = "Enable Prediction", Flag = "PredictionEnabled", Default = false, Callback = function(Value)
     C.PredictionEnabled = Value
 end})
 
 -- Prediction slider
-AdvancedSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
+PredictSection:Slider({Name = "Prediction", Min = 0, Max = 50, Default = 5, Suffix = " studs", Decimals = 1, Flag = "Prediction", Callback = function(Value)
     C.Prediction = Value
 end})
 
 -- Triggerbot: clicks when the cursor sits on a valid enemy
-AdvancedSection:Toggle({Name = "Triggerbot", Flag = "Triggerbot", Default = false, Callback = function(Value)
+TriggerSection:Toggle({Name = "Triggerbot", Flag = "Triggerbot", Default = false, Callback = function(Value)
     C.Triggerbot = Value
 end})
 
-AdvancedSection:Slider({Name = "Trigger Delay", Min = 0, Max = 1, Default = 0.1, Suffix = "s", Decimals = 2, Flag = "TriggerDelay", Callback = function(Value)
+TriggerSection:Slider({Name = "Trigger Delay", Min = 0, Max = 1, Default = 0.1, Suffix = "s", Decimals = 2, Flag = "TriggerDelay", Callback = function(Value)
     C.TriggerDelay = Value
 end})
 
-AdvancedSection:Toggle({Name = "Require Lock", Flag = "TriggerLock", Default = true, Callback = function(Value)
+TriggerSection:Toggle({Name = "Require Lock", Flag = "TriggerLock", Default = true, Callback = function(Value)
     C.TriggerLock = Value
 end})
 
 -- Vertical prediction (time-factor on Y velocity, Azure-style)
-AdvancedSection:Slider({Name = "Vertical Prediction", Min = 0, Max = 1, Default = 0.13, Suffix = "s", Decimals = 2, Flag = "PredictionVertical", Callback = function(Value)
+PredictSection:Slider({Name = "Vertical Prediction", Min = 0, Max = 1, Default = 0.13, Suffix = "s", Decimals = 2, Flag = "PredictionVertical", Callback = function(Value)
     C.PredictionVertical = Value
 end})
 
 -- Resolver: differentiate real velocity from position history (beats
 -- velocity spoofing), refreshed at the set rate while locked
-AdvancedSection:Toggle({Name = "Resolver", Flag = "Resolver", Default = false, Callback = function(Value)
+PredictSection:Toggle({Name = "Resolver", Flag = "Resolver", Default = false, Callback = function(Value)
     C.Resolver = Value
 end})
 
-AdvancedSection:Slider({Name = "Resolver Rate", Min = 1, Max = 200, Default = 60, Suffix = "hz", Decimals = 1, Flag = "ResolverRate", Callback = function(Value)
+PredictSection:Slider({Name = "Resolver Rate", Min = 1, Max = 200, Default = 60, Suffix = "hz", Decimals = 1, Flag = "ResolverRate", Callback = function(Value)
     C.ResolverRate = Value
 end})
 
 -- Air Offset: extra lift when the target is airborne (Freefall)
-AdvancedSection:Toggle({Name = "Air Offset", Flag = "AirOffset", Default = false, Callback = function(Value)
+PredictSection:Toggle({Name = "Air Offset", Flag = "AirOffset", Default = false, Callback = function(Value)
     C.AirOffset = Value
 end})
 
-AdvancedSection:Slider({Name = "Air Offset Amount", Min = -10, Max = 10, Default = 2, Suffix = " studs", Decimals = 1, Flag = "AirOffsetAmount", Callback = function(Value)
+PredictSection:Slider({Name = "Air Offset Amount", Min = -10, Max = 10, Default = 2, Suffix = " studs", Decimals = 1, Flag = "AirOffsetAmount", Callback = function(Value)
     C.AirOffsetAmount = Value
 end})
 
 -- Re-target Delay: cooldown after a lock drops before acquiring again
-AdvancedSection:Slider({Name = "Re-target Delay", Min = 0, Max = 2, Default = 0, Suffix = "s", Decimals = 2, Flag = "RetargetDelay", Callback = function(Value)
+TriggerSection:Slider({Name = "Re-target Delay", Min = 0, Max = 2, Default = 0, Suffix = "s", Decimals = 2, Flag = "RetargetDelay", Callback = function(Value)
     C.RetargetDelay = Value
 end})
 
 -- Vertical smoothing (mouse aim mode only)
-AdvancedSection:Slider({Name = "Vertical Smoothing", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "SmoothnessVertical", Callback = function(Value)
+SmoothSection:Slider({Name = "Vertical Smoothing", Min = 1, Max = 100, Default = 10, Suffix = "x", Decimals = 1, Flag = "SmoothnessVertical", Callback = function(Value)
     C.SmoothnessVertical = Value
 end})
 
@@ -475,41 +513,45 @@ ESPSection:Toggle({Name = "Team Colors", Flag = "TeamColors", Default = false, C
     C.TeamColors = Value
 end})
 
-ESPSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
+HealthSection:Toggle({Name = "Health Bar", Flag = "HealthBar", Default = false, Callback = function(Value)
     C.HealthBar = Value
 end})
 
-ESPSection:Dropdown({Name = "Bar Position", Flag = "HealthBarPos", Default = "Left", Items = {"Left", "Top", "Right", "Bottom"}, Callback = function(Value)
+HealthSection:Dropdown({Name = "Bar Position", Flag = "HealthBarPos", Default = "Left", Items = {"Left", "Top", "Right", "Bottom"}, Callback = function(Value)
     C.HealthBarPos = Value
 end})
 
-ESPSection:Toggle({Name = "Health Number", Flag = "HealthNumber", Default = false, Callback = function(Value)
+HealthSection:Toggle({Name = "Health Number", Flag = "HealthNumber", Default = false, Callback = function(Value)
     C.HealthNumber = Value
 end})
 
-ESPSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
+TextSection:Toggle({Name = "Name ESP", Flag = "NameESP", Default = false, Callback = function(Value)
     C.NameESP = Value
+end}):Colorpicker({Name = "Name Color", Flag = "Name Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.NameColor = Value end
 end})
 
-ESPSection:Toggle({Name = "Distance ESP", Flag = "DistanceESP", Default = false, Callback = function(Value)
+TextSection:Toggle({Name = "Distance ESP", Flag = "DistanceESP", Default = false, Callback = function(Value)
     C.DistanceESP = Value
+end}):Colorpicker({Name = "Distance Color", Flag = "Distance Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
+    if typeof(Value) == "Color3" then C.DistanceColor = Value end
 end})
 
-ESPSection:Toggle({Name = "ESP Tracer", Flag = "ESPTracer", Default = false, Callback = function(Value)
+TracerSection:Toggle({Name = "ESP Tracer", Flag = "ESPTracer", Default = false, Callback = function(Value)
     C.ESPTracer = Value
 end}):Colorpicker({Name = "ESP Tracer Color", Flag = "ESP Tracer Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.ESPTracerColor = Value end
 end})
 
-ESPSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
+TracerSection:Dropdown({Name = "ESP Tracer Origin", Flag = "ESPTracerOrigin", Default = "Bottom", Items = {"Cursor", "Bottom", "Top"}, Callback = function(Value)
     C.ESPTracerOrigin = Value
 end})
 
-ESPSection:Slider({Name = "Tracer Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "ESPTracerThickness", Callback = function(Value)
+TracerSection:Slider({Name = "Tracer Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "ESPTracerThickness", Callback = function(Value)
     C.ESPTracerThickness = Value
 end})
 
-ESPSection:Slider({Name = "Tracer Opacity", Min = 0, Max = 100, Default = 100, Suffix = "%", Decimals = 1, Flag = "ESPTracerOpacity", Callback = function(Value)
+TracerSection:Slider({Name = "Tracer Opacity", Min = 0, Max = 100, Default = 100, Suffix = "%", Decimals = 1, Flag = "ESPTracerOpacity", Callback = function(Value)
     C.ESPTracerOpacity = Value
 end})
 
@@ -533,35 +575,39 @@ CrossSection:Toggle({Name = "Center Dot", Flag = "CrossDot", Default = true, Cal
     C.CrossDot = Value
 end})
 
-ESPSection:Toggle({Name = "Skeleton ESP", Flag = "Skeleton", Default = false, Callback = function(Value)
+SkeletonSection:Toggle({Name = "Skeleton ESP", Flag = "Skeleton", Default = false, Callback = function(Value)
     C.Skeleton = Value
 end}):Colorpicker({Name = "Skeleton Color", Flag = "Skeleton Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.SkeletonColor = Value end
 end})
 
-ESPSection:Slider({Name = "Skeleton Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "SkeletonThickness", Callback = function(Value)
+SkeletonSection:Slider({Name = "Skeleton Thickness", Min = 1, Max = 5, Default = 1, Suffix = "px", Decimals = 1, Flag = "SkeletonThickness", Callback = function(Value)
     C.SkeletonThickness = Value
 end})
 
-ESPSection:Slider({Name = "ESP Max Distance", Min = 0, Max = 2000, Default = 0, Suffix = " studs", Decimals = 1, Flag = "ESPMaxDistance", Callback = function(Value)
+PerfSection:Slider({Name = "ESP Max Distance", Min = 0, Max = 2000, Default = 0, Suffix = " studs", Decimals = 1, Flag = "ESPMaxDistance", Callback = function(Value)
     C.ESPMaxDistance = Value
 end})
 
-ESPSection:Toggle({Name = "Head Dot", Flag = "HeadDot", Default = false, Callback = function(Value)
+PerfSection:Slider({Name = "ESP Smoothing", Min = 2, Max = 40, Default = 18, Suffix = "/s", Decimals = 1, Flag = "ESPSmoothing", Callback = function(Value)
+    C.ESPSmoothing = Value
+end})
+
+SkeletonSection:Toggle({Name = "Head Dot", Flag = "HeadDot", Default = false, Callback = function(Value)
     C.HeadDot = Value
 end}):Colorpicker({Name = "Head Color", Flag = "Dot Color", Default = Color3.fromRGB(255, 255, 255), Callback = function(Value, Alpha)
     if typeof(Value) == "Color3" then C.HeadDotColor = Value end
 end})
 
-ESPSection:Slider({Name = "Head Size", Min = 2, Max = 12, Default = 4, Suffix = "px", Decimals = 1, Flag = "HeadDotSize", Callback = function(Value)
+SkeletonSection:Slider({Name = "Head Size", Min = 2, Max = 12, Default = 4, Suffix = "px", Decimals = 1, Flag = "HeadDotSize", Callback = function(Value)
     C.HeadDotSize = Value
 end})
 
-ESPSection:Slider({Name = "Text Size", Min = 8, Max = 20, Default = 13, Suffix = "px", Decimals = 1, Flag = "ESPTextSize", Callback = function(Value)
+TextSection:Slider({Name = "Text Size", Min = 8, Max = 20, Default = 13, Suffix = "px", Decimals = 1, Flag = "ESPTextSize", Callback = function(Value)
     C.ESPTextSize = Value
 end})
 
-ESPSection:Dropdown({Name = "Text Font", Flag = "ESPFont", Default = "UI", Items = {"UI", "System", "Plex", "Monospace"}, Callback = function(Value)
+TextSection:Dropdown({Name = "Text Font", Flag = "ESPFont", Default = "UI", Items = {"UI", "System", "Plex", "Monospace"}, Callback = function(Value)
     C.ESPFont = Value
 end})
 
@@ -1125,7 +1171,7 @@ local function updateESP(dt)
         -- Smooth the rect toward its new position: raw bounding-box corners
         -- jump around on fast camera flicks, the smoothed rect does not.
         local w, h = maxX - minX, maxY - minY
-        local k = 1 - math.exp(-18 * (dt or 0.016))
+        local k = 1 - math.exp(-math.max(C.ESPSmoothing, 1) * (dt or 0.016))
         if e.sx == nil then
             e.sx, e.sy, e.sw, e.sh = minX, minY, w, h
         else
@@ -1242,7 +1288,7 @@ local function updateESP(dt)
                 e.hpNum.Visible = true
                 e.hpNum.Text = tostring(math.floor(hum2.Health + 0.5))
                 e.hpNum.Position = Vector2.new(sx - 32, sy - 16)
-                e.hpNum.Color = Color3.fromRGB(255, 255, 255)
+                e.hpNum.Color = C.HealthNumberColor
             else
                 e.hpNum.Visible = false
             end
@@ -1255,7 +1301,7 @@ local function updateESP(dt)
             e.text.Visible = true
             e.text.Text = player.Name
             e.text.Position = Vector2.new(cx, sy - 16)
-            e.text.Color = Color3.fromRGB(255, 255, 255)
+            e.text.Color = C.NameColor
         elseif e.text then
             e.text.Visible = false
         end
@@ -1266,7 +1312,7 @@ local function updateESP(dt)
                 e.dist.Visible = true
                 e.dist.Text = "[" .. d .. "m]"
                 e.dist.Position = Vector2.new(sx + sw + 3, sy - 16)
-                e.dist.Color = Color3.fromRGB(255, 255, 255)
+                e.dist.Color = C.DistanceColor
             else
                 e.dist.Visible = false
             end
@@ -1476,18 +1522,32 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovCircle.Radius = C.FOVSize
         fovCircle.Transparency = C.FOVOpacity / 100
         fovCircle.Thickness = C.FOVThickness
+        -- Fill sits just inside the ring stroke so the ring stays crisp, and
+        -- supports rainbow cycling plus a breathing pulse animation
+        local fillColor = C.FOVFillColor
+        if C.FillRainbow then
+            fillColor = Color3.fromHSV((os.clock() % C.RainbowSpeed) / C.RainbowSpeed, 1, 1)
+        end
+        local fillOp = C.FOVFillOpacity / 100
+        if C.FillPulse then
+            fillOp *= (0.55 + 0.45 * math.sin(os.clock() * 4))
+        end
         fovFill.Position = anchor
-        fovFill.Radius = C.FOVSize
-        fovFill.Color = C.FOVFillColor
-        fovFill.Transparency = C.FOVFillOpacity / 100
-
-        -- Update FOV visualization (follows the master Enable switch)
-        fovOutline.Position = anchor
-        fovOutline.Radius = C.FOVSize
-        fovOutline.Thickness = C.FOVThickness + 2
+        fovFill.Radius = math.max(C.FOVSize - C.FOVThickness / 2, 1)
+        fovFill.Color = fillColor
+        fovFill.Transparency = fillOp
 
         -- Update FOV visualization (follows the FOV switch so the circle can
         -- be sized/positioned before the aimbot itself is enabled)
+        local outlineColor = C.OutlineColor
+        if C.OutlineRainbow then
+            outlineColor = Color3.fromHSV((os.clock() % C.RainbowSpeed) / C.RainbowSpeed, 1, 1)
+        end
+        fovOutline.Position = anchor
+        fovOutline.Radius = C.FOVSize
+        fovOutline.Thickness = C.FOVThickness + 2
+        fovOutline.Color = outlineColor
+        fovOutline.Transparency = C.OutlineOpacity / 100
         fovCircle.Visible = C.FOV
         fovFill.Visible = C.FOV and C.FOVFilled
         fovOutline.Visible = C.FOV and C.FOVOutline
