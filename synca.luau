@@ -115,6 +115,14 @@ local C = {
     CrossDot = true,
 }
 
+-- Anti Void helper (defined up here because the toggle defaults ON and
+-- fires during UI construction, long before the engine section loads).
+local function applyAntiVoid(on)
+    pcall(function()
+        workspace.FallenPartsDestroyHeight = on and (-0 / 0) or -500
+    end)
+end
+
 -- Drawing objects BEFORE UI (callbacks fire immediately on creation for sliders,
 -- so fovCircle must already exist or launch throws "attempt to index nil")
 -- Creation order = draw order: the outline ring is created FIRST so it sits
@@ -1810,13 +1818,7 @@ task.spawn(function()
     end
 end)
 
--- Anti Void: NaN kill-height disables local fall destruction (server keeps
--- its own). Applied on launch, on respawn, and every tick while desync runs.
-local function applyAntiVoid(on)
-    pcall(function()
-        workspace.FallenPartsDestroyHeight = on and (-0 / 0) or -500
-    end)
-end
+-- Anti Void: applied on launch, on respawn, and every tick while desync runs.
 applyAntiVoid(C.AntiVoid)
 
 LocalPlayer.CharacterAdded:Connect(function()
