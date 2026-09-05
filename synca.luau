@@ -248,6 +248,26 @@ local function onPhysicsStep(fn)
     if not ok then _rs.Heartbeat:Connect(fn) end
 end
 
+-- Spoof position ghost: velocity tricks keep the body near its real spot,
+-- so this marker shows approximately where the server sees you while
+-- spoofing or velocity-desyncing. Client-only, never collides.
+local spoofMarker = nil
+pcall(function()
+    local m = Instance.new("Part")
+    m.Name = "syncaSpoofMarker"
+    m.Anchored = true
+    m.CanCollide = false
+    m.CanQuery = false
+    m.CanTouch = false
+    m.Transparency = 1
+    m.Material = Enum.Material.Neon
+    m.Color = Color3.fromRGB(255, 150, 0)
+    m.Size = Vector3.new(3, 5, 2)
+    m.CFrame = CFrame.new(0, -100, 0)
+    m.Parent = workspace
+    spoofMarker = m
+end)
+
 -- Mobile fly controls: the thumbstick already drives Humanoid.MoveDirection
 -- (so steering works on touch), but vertical has no keys there. These
 -- on-screen hold-to-rise/sink buttons appear only on touch devices while
@@ -1592,6 +1612,7 @@ local RSVC = game:GetService("RunService")
 
 -- Movement engine: velocity mode (default, replicates naturally) or CFrame
 -- teleport mode. Refs re-fetched every tick so respawns just work.
+local speedOrig, speedApplied = nil, false
 onPhysicsStep(function(dt)
     pcall(function()
         if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) and next(noclipOrig) == nil then return end
@@ -1602,6 +1623,16 @@ onPhysicsStep(function(dt)
         if C.JumpPower then
             hum.UseJumpPower = true
             hum.JumpPower = C.JumpPowerAmount
+        end
+        -- WalkSpeed assist: custom character controllers own velocity and
+        -- would ignore our writes, but almost all of them scale WalkSpeed.
+        if C.Speed and hum then
+            if not speedApplied then speedOrig = hum.WalkSpeed speedApplied = true end
+            hum.WalkSpeed = C.SpeedAmount
+        elseif speedApplied then
+            speedApplied = false
+            if hum and speedOrig then pcall(function() hum.WalkSpeed = speedOrig end) end
+            speedOrig = nil
         end
         if C.Noclip then
             noclipStep()
@@ -1647,6 +1678,10 @@ UIS.JumpRequest:Connect(function()
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     if hum and not hum.Seated then
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        -- CFrame lift fallback: controller-owned humanoids ignore state
+        -- changes, but nothing ignores a position write.
+        local hrp = ch:FindFirstChild("HumanoidRootPart")
+        if hrp then hrp.CFrame += Vector3.new(0, 3, 0) end
     end
 end)
 
@@ -1690,7 +1725,11 @@ task.spawn(function()
         if C.SpoofVelocity then
             local ch = LocalPlayer.Character
             local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if hrp then
+            local hum0 = ch and ch:FindFirstChildOfClass("Humanoid")
+            -- Pause while moving or seated: spoofing must never fight your
+            -- own locomotion (that tug-of-war is what froze movement).
+            local heldStill = not hum0 or (hum0.MoveDirection.Magnitude < 0.1 and not hum0.Seated)
+            if hrp and heldStill then
                 pcall(function()
                     local v = hrp.Velocity
                     local sv = v
@@ -1749,7 +1788,9 @@ task.spawn(function()
         if C.VelDesync then
             local ch = LocalPlayer.Character
             local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if hrp then
+            local hum0 = ch and ch:FindFirstChildOfClass("Humanoid")
+            local heldStill = not hum0 or (hum0.MoveDirection.Magnitude < 0.1 and not hum0.Seated)
+            if hrp and heldStill then
                 pcall(function()
                     local v = hrp.Velocity
                     local a = math.floor(C.VelDesyncRange * 1000)
@@ -1971,6 +2012,23 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovCircle.Visible = C.FOV
         fovFill.Visible = C.FOV and C.FOVFilled
         fovOutline.Visible = C.FOV and C.FOVOutline
+
+        -- Spoof position ghost follows your real body while either velocity
+        -- trick is armed (server sees you roughly there).
+        if spoofMarker then
+            if C.SpoofVelocity or C.VelDesync then
+                local sch = LocalPlayer.Character
+                local shrp = sch and sch:FindFirstChild("HumanoidRootPart")
+                if shrp then
+                    spoofMarker.CFrame = shrp.CFrame
+                    spoofMarker.Transparency = 0.5
+                else
+                    spoofMarker.Transparency = 1
+                end
+            else
+                spoofMarker.Transparency = 1
+            end
+        end
 
         -- Crosshair overlay at screen center
         pcall(function()
