@@ -1941,7 +1941,6 @@ RSVC.Heartbeat:Connect(function()
         else -- Underground: configurable depth down, pitched flat
             target = CFrame.new(old.Position - Vector3.new(0, C.UndergroundDepth, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
         end
-        if C.Desync then applyAntiVoid() end
         root.CFrame = target
         if desyncSetback then
             -- +1.5Y: a Part subject frames lower than a Humanoid one does
