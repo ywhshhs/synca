@@ -84,6 +84,11 @@ local C = {
     FakeLagInterval = 0.2,
     VelDesync = false,
     VelDesyncRange = 2,
+    Desync = false,
+    DesyncMode = "Void",
+    VoidTime = 0.4,
+    NormalTime = 0.13,
+    DesyncGhost = true,
     FoVColor = Color3.fromRGB(166, 147, 243),
     LockedColor = Color3.fromRGB(255, 150, 150),
     FOVOutline = false,
@@ -204,6 +209,33 @@ end)
 -- True only when the executor really supports Drawing (dummy fallback tables
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
+
+-- Noclip applier (Nameless-style): records original collision once per
+-- character and forces it off, skipping redundant writes. Called immediately
+-- on toggle plus every physics tick, so no simulation step ever sees it.
+local noclipOrig = {}
+local noclipChar = nil
+local function applyNoclip()
+    local ok, ch = pcall(function() return game:GetService("Players").LocalPlayer.Character end)
+    if not ok or not ch then return end
+    if noclipChar ~= ch then noclipOrig = {} noclipChar = ch end
+    for _, part in ipairs(ch:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if noclipOrig[part] == nil then noclipOrig[part] = part.CanCollide end
+            if part.CanCollide == true then part.CanCollide = false end
+        end
+    end
+end
+
+-- Physics-step subscription with Heartbeat fallback (PreSimulation runs
+-- pre-physics, which is what makes noclip-style writes stick).
+local function onPhysicsStep(fn)
+    local _rs = game:GetService("RunService")
+    local ok = pcall(function()
+        _rs.PreSimulation:Connect(fn)
+    end)
+    if not ok then _rs.Heartbeat:Connect(fn) end
+end
 
 -- Mobile fly controls: the thumbstick already drives Humanoid.MoveDirection
 -- (so steering works on touch), but vertical has no keys there. These
@@ -532,6 +564,28 @@ MiscSection:Slider({Name = "Desync Range", Min = 1, Max = 10, Default = 2, Suffi
     C.VelDesyncRange = Value
 end})
 
+-- Desync (csync-style): server replicates a flung/fake body while your
+-- camera stays pinned to your real spot, then restores every tick
+MiscSection:Toggle({Name = "Desync", Flag = "Desync", Default = false, Callback = function(Value)
+    C.Desync = Value
+end})
+
+MiscSection:Dropdown({Name = "Desync Mode", Flag = "DesyncMode", Default = "Void", Items = {"Void", "Pulse", "Underground"}, Callback = function(Value)
+    C.DesyncMode = Value
+end})
+
+MiscSection:Slider({Name = "Void Time", Min = 0.1, Max = 1, Default = 0.4, Suffix = "s", Decimals = 2, Flag = "VoidTime", Callback = function(Value)
+    C.VoidTime = Value
+end})
+
+MiscSection:Slider({Name = "Normal Time", Min = 0.05, Max = 0.5, Default = 0.13, Suffix = "s", Decimals = 2, Flag = "NormalTime", Callback = function(Value)
+    C.NormalTime = Value
+end})
+
+MiscSection:Toggle({Name = "Desync Ghost", Flag = "DesyncGhost", Default = true, Callback = function(Value)
+    C.DesyncGhost = Value
+end})
+
 -- Full ESP suite (everyone passing the Team Check filter)
 ESPSection:Toggle({Name = "ESP Highlight", Flag = "ESPHighlight", Default = false, Callback = function(Value)
     C.ESPHighlight = Value
@@ -651,6 +705,7 @@ end})
 
 SpeedSection:Toggle({Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(Value)
     C.Noclip = Value
+    if Value then pcall(applyNoclip) end
 end})
 
 JumpSection:Toggle({Name = "Jump Power", Flag = "JumpPower", Default = false, Callback = function(Value)
@@ -1517,9 +1572,7 @@ local RSVC = game:GetService("RunService")
 
 -- Movement engine: velocity mode (default, replicates naturally) or CFrame
 -- teleport mode. Refs re-fetched every tick so respawns just work.
-local noclipOrig = {}
-local noclipChar = nil
-RSVC.Heartbeat:Connect(function(dt)
+onPhysicsStep(function(dt)
     pcall(function()
         if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) and next(noclipOrig) == nil then return end
         local ch = LocalPlayer.Character
@@ -1531,14 +1584,7 @@ RSVC.Heartbeat:Connect(function(dt)
             hum.JumpPower = C.JumpPowerAmount
         end
         if C.Noclip then
-            -- Track originals per character so disabling restores properly
-            if noclipChar ~= ch then noclipOrig = {} noclipChar = ch end
-            for _, part in ipairs(ch:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    if noclipOrig[part] == nil then noclipOrig[part] = part.CanCollide end
-                    part.CanCollide = false
-                end
-            end
+            applyNoclip()
             -- Hover: phased-out body has no floor, so hold altitude instead
             -- of falling through the world (Ctrl/C or mobile down to sink)
             if not hum.Seated and not C.Fly then
@@ -1706,6 +1752,154 @@ task.spawn(function()
             task.wait(0.05)
         end
     end
+end)
+
+-- Desync engine (csync pattern): each tick saves the real CFrame, teleports
+-- the body to the fake target (the SERVER replicates that), pins the camera
+-- to a setback part at the real spot, waits a render step, then restores.
+-- A neon ghost shows the server-side body. All client-created visuals only.
+local desyncSetback = nil
+local desyncGhostFolder = nil
+local desyncGhosts = {}
+local desyncTimer = 0
+local desyncVoidPhase = true
+local desyncPhaseT = 0
+local desyncWasOn = false
+
+pcall(function()
+    desyncSetback = Instance.new("Part")
+    desyncSetback.Name = "syncaDesyncSetback"
+    desyncSetback.Size = Vector3.new(2, 2, 1)
+    desyncSetback.Anchored = true
+    desyncSetback.CanCollide = false
+    desyncSetback.CanQuery = false
+    desyncSetback.CanTouch = false
+    desyncSetback.Transparency = 1
+    desyncSetback.CFrame = CFrame.new(0, -2000, 0)
+    desyncSetback.Parent = workspace
+end)
+
+local function desyncClearGhost()
+    if desyncGhostFolder then pcall(function() desyncGhostFolder:Destroy() end) end
+    desyncGhostFolder = nil
+    desyncGhosts = {}
+end
+
+local function desyncBuildGhost()
+    desyncClearGhost()
+    local ch = LocalPlayer.Character
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not ch or not root then return end
+    local ok, folder = pcall(function()
+        local f = Instance.new("Folder")
+        f.Name = "syncaGhost"
+        f.Parent = workspace
+        return f
+    end)
+    if not ok or not folder then return end
+    desyncGhostFolder = folder
+    for _, p in ipairs(ch:GetChildren()) do
+        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+            local okg, ghost = pcall(function()
+                local g = Instance.new("Part")
+                g.Size = p.Size
+                g.Anchored = true
+                g.CanCollide = false
+                g.CanQuery = false
+                g.CanTouch = false
+                g.CastShadow = false
+                g.Material = Enum.Material.Neon
+                g.Color = Color3.fromRGB(0, 140, 255)
+                g.Transparency = 0.5
+                g.TopSurface = Enum.SurfaceType.Smooth
+                g.BottomSurface = Enum.SurfaceType.Smooth
+                g.Parent = folder
+                return g
+            end)
+            if okg and ghost then
+                desyncGhosts[p] = { part = ghost, offset = root.CFrame:Inverse() * p.CFrame }
+            end
+        end
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    desyncClearGhost()
+    desyncTimer, desyncPhaseT = 0, 0
+    desyncVoidPhase = true
+    if C.Desync and C.DesyncGhost then
+        task.delay(0.15, function()
+            if C.Desync then desyncBuildGhost() end
+        end)
+    end
+end)
+
+RSVC.Heartbeat:Connect(function()
+    if not C.Desync then
+        if desyncWasOn then
+            desyncWasOn = false
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                local ch = LocalPlayer.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if cam and hum then cam.CameraSubject = hum end
+            end)
+            if desyncSetback then desyncSetback.CFrame = CFrame.new(0, -2000, 0) end
+            desyncClearGhost()
+            desyncTimer, desyncPhaseT = 0, 0
+            desyncVoidPhase = true
+        end
+        return
+    end
+    desyncWasOn = true
+    pcall(function()
+        local ch = LocalPlayer.Character
+        if not ch then return end
+        local root = ch:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if C.DesyncGhost and not desyncGhostFolder then desyncBuildGhost() end
+        local old = root.CFrame
+        local target = old
+        if C.DesyncMode == "Void" then
+            target = CFrame.new(old.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+        elseif C.DesyncMode == "Pulse" then
+            local now = os.clock()
+            if desyncPhaseT == 0 then desyncPhaseT = now desyncVoidPhase = true end
+            if desyncVoidPhase then
+                if now - desyncPhaseT >= C.VoidTime then desyncVoidPhase = false desyncPhaseT = now end
+            elseif now - desyncPhaseT >= C.NormalTime then
+                desyncVoidPhase = true desyncPhaseT = now
+            end
+            if desyncVoidPhase then
+                target = CFrame.new(old.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+            end
+        else -- Underground: 6 studs down, pitched flat
+            target = CFrame.new(old.Position - Vector3.new(0, 6, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
+        end
+        root.CFrame = target
+        if desyncSetback then
+            desyncSetback.CFrame = old
+            local cam = workspace.CurrentCamera
+            if cam and hum then cam.CameraSubject = desyncSetback end
+        end
+        if C.DesyncGhost then
+            local dead = {}
+            for real, data in pairs(desyncGhosts) do
+                if not real.Parent or not data.part or not data.part.Parent then
+                    table.insert(dead, real)
+                else
+                    data.part.CFrame = target * data.offset
+                end
+            end
+            for _, real in ipairs(dead) do desyncGhosts[real] = nil end
+        end
+        RSVC.RenderStepped:Wait()
+        root.CFrame = old
+        if desyncSetback then desyncSetback.CFrame = CFrame.new(0, -2000, 0) end
+        local cam2 = workspace.CurrentCamera
+        if cam2 and hum then cam2.CameraSubject = hum end
+    end)
 end)
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
