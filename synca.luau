@@ -205,6 +205,62 @@ end)
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
 
+-- Mobile fly controls: the thumbstick already drives Humanoid.MoveDirection
+-- (so steering works on touch), but vertical has no keys there. These
+-- on-screen hold-to-rise/sink buttons appear only on touch devices while
+-- Fly is enabled. Declared up here so the engine below captures the locals.
+local flyUpHeld, flyDownHeld = false, false
+local flyGui = nil
+do
+    local _tuis = game:GetService("UserInputService")
+    local isTouch = _tuis.TouchEnabled and not _tuis.KeyboardEnabled
+    if isTouch then
+        pcall(function()
+            local parent = nil
+            pcall(function()
+                if typeof(gethui) == "function" then parent = gethui() end
+            end)
+            if not parent then parent = game:GetService("CoreGui") end
+            local gui = Instance.new("ScreenGui")
+            gui.Name = "synca_fly"
+            gui.ResetOnSpawn = false
+            gui.Enabled = false
+            gui.Parent = parent
+            local function mkbutton(text, yOff)
+                local b = Instance.new("TextButton")
+                b.Size = UDim2.new(0, 64, 0, 64)
+                b.Position = UDim2.new(1, -84, 0.5, yOff)
+                b.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+                b.BackgroundTransparency = 0.3
+                b.TextColor3 = Color3.fromRGB(255, 255, 255)
+                b.TextSize = 28
+                b.Font = Enum.Font.SourceSansBold
+                b.Text = text
+                local c = Instance.new("UICorner")
+                c.CornerRadius = UDim.new(0, 12)
+                c.Parent = b
+                b.Parent = gui
+                return b
+            end
+            local function bind(btn, set)
+                btn.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        set(true)
+                    end
+                end)
+                btn.InputEnded:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        set(false)
+                    end
+                end)
+            end
+            bind(mkbutton("\226\150\178", -76), function(v) flyUpHeld = v end)
+            bind(mkbutton("\226\150\189", 0), function(v) flyDownHeld = v end)
+            flyGui = gui
+        end)
+    end
+end
+
 local Window = Library:Window({
     Name = "synca",
     FadeSpeed = 0.25
@@ -572,6 +628,7 @@ local JumpSection = MovementTab:Section({Name = "Jump", Side = 1})
 
 FlySection:Toggle({Name = "Fly", Flag = "Fly", Default = false, Callback = function(Value)
     C.Fly = Value
+    if flyGui then flyGui.Enabled = Value end
 end})
 
 FlySection:Slider({Name = "Fly Speed", Min = 10, Max = 200, Default = 60, Suffix = " studs/s", Decimals = 1, Flag = "FlySpeed", Callback = function(Value)
@@ -1480,8 +1537,8 @@ RSVC.Heartbeat:Connect(function(dt)
         local md = hum.MoveDirection
         if C.Fly then
             local y = 0
-            if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) then y = 1
-            elseif UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) then y = -1 end
+            if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) or flyUpHeld then y = 1
+            elseif UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) or flyDownHeld then y = -1 end
             local dir = Vector3.new(md.X, y, md.Z)
             if dir.Magnitude > 1 then dir = dir.Unit end
             if C.CFrameMode then
