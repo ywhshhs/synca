@@ -85,7 +85,6 @@ local C = {
     VelDesync = false,
     VelDesyncRange = 2,
     UndergroundDepth = 6,
-    AntiVoid = true,
     Desync = false,
     DesyncMode = "Void",
     VoidTime = 0.4,
@@ -115,11 +114,11 @@ local C = {
     CrossDot = true,
 }
 
--- Anti Void helper (defined up here because the toggle defaults ON and
--- fires during UI construction, long before the engine section loads).
-local function applyAntiVoid(on)
+-- Anti Void: NaN kill-height, always on. Applied at startup, on respawn,
+-- and every tick while desync runs.
+local function applyAntiVoid()
     pcall(function()
-        workspace.FallenPartsDestroyHeight = on and (-0 / 0) or -500
+        workspace.FallenPartsDestroyHeight = (-0 / 0)
     end)
 end
 
@@ -605,11 +604,6 @@ end})
 
 MiscSection:Slider({Name = "Underground Depth", Min = 1, Max = 30, Default = 6, Suffix = " studs", Decimals = 1, Flag = "UndergroundDepth", Callback = function(Value)
     C.UndergroundDepth = Value
-end})
-
-MiscSection:Toggle({Name = "Anti Void", Flag = "AntiVoid", Default = true, Callback = function(Value)
-    C.AntiVoid = Value
-    applyAntiVoid(Value)
 end})
 
 -- Desync (csync-style): server replicates a flung/fake body while your
@@ -1818,11 +1812,10 @@ task.spawn(function()
     end
 end)
 
--- Anti Void: applied on launch, on respawn, and every tick while desync runs.
-applyAntiVoid(C.AntiVoid)
+applyAntiVoid()
 
 LocalPlayer.CharacterAdded:Connect(function()
-    if C.AntiVoid then applyAntiVoid(true) end
+    applyAntiVoid()
 end)
 
 -- Desync engine (csync pattern): each tick saves the real CFrame, teleports
@@ -1948,7 +1941,7 @@ RSVC.Heartbeat:Connect(function()
         else -- Underground: configurable depth down, pitched flat
             target = CFrame.new(old.Position - Vector3.new(0, C.UndergroundDepth, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
         end
-        if C.AntiVoid or C.Desync then applyAntiVoid(true) end
+        if C.Desync then applyAntiVoid() end
         root.CFrame = target
         if desyncSetback then
             -- +1.5Y: a Part subject frames lower than a Humanoid one does
