@@ -1517,9 +1517,11 @@ local RSVC = game:GetService("RunService")
 
 -- Movement engine: velocity mode (default, replicates naturally) or CFrame
 -- teleport mode. Refs re-fetched every tick so respawns just work.
+local noclipOrig = {}
+local noclipChar = nil
 RSVC.Heartbeat:Connect(function(dt)
     pcall(function()
-        if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) then return end
+        if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) and next(noclipOrig) == nil then return end
         local ch = LocalPlayer.Character
         local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -1529,9 +1531,28 @@ RSVC.Heartbeat:Connect(function(dt)
             hum.JumpPower = C.JumpPowerAmount
         end
         if C.Noclip then
-            for _, p in ipairs(ch:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
+            -- Track originals per character so disabling restores properly
+            if noclipChar ~= ch then noclipOrig = {} noclipChar = ch end
+            for _, part in ipairs(ch:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if noclipOrig[part] == nil then noclipOrig[part] = part.CanCollide end
+                    part.CanCollide = false
+                end
             end
+            -- Hover: phased-out body has no floor, so hold altitude instead
+            -- of falling through the world (Ctrl/C or mobile down to sink)
+            if not hum.Seated and not C.Fly then
+                local vy = 0
+                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.C) or flyDownHeld then vy = -15 end
+                local vv = hrp.AssemblyLinearVelocity
+                hrp.AssemblyLinearVelocity = Vector3.new(vv.X, vy, vv.Z)
+            end
+        elseif next(noclipOrig) ~= nil then
+            for part, was in pairs(noclipOrig) do
+                pcall(function() if part.Parent then part.CanCollide = was end end)
+            end
+            noclipOrig = {}
+            noclipChar = nil
         end
         if hum.Seated then return end
         local md = hum.MoveDirection
@@ -1610,15 +1631,24 @@ task.spawn(function()
             if hrp then
                 pcall(function()
                     local v = hrp.Velocity
+                    local sv = v
                     if C.SpoofType == "Underground" then
-                        hrp.Velocity = v + Vector3.new(0, -C.SpoofStrength, 0)
+                        sv = v + Vector3.new(0, -C.SpoofStrength, 0)
                     elseif C.SpoofType == "Sky" then
-                        hrp.Velocity = v + Vector3.new(0, C.SpoofStrength, 0)
+                        sv = v + Vector3.new(0, C.SpoofStrength, 0)
                     else
-                        hrp.Velocity = Vector3.new(0, 0, 0)
+                        sv = Vector3.new(0, 0, 0)
                     end
+                    local t0 = os.clock()
+                    hrp.Velocity = sv
                     RSVC.RenderStepped:Wait()
+                    local dtw = math.max(os.clock() - t0, 0.0001)
                     hrp.Velocity = v
+                    -- Erase the spoofed displacement locally (server already
+                    -- got the packet): subtract what the fake velocity added
+                    -- so your screen never jumps while the server sees fake.
+                    local cur = hrp.CFrame
+                    hrp.CFrame = cur - (sv - v) * dtw
                 end)
             end
         else
@@ -1661,9 +1691,15 @@ task.spawn(function()
                 pcall(function()
                     local v = hrp.Velocity
                     local a = math.floor(C.VelDesyncRange * 1000)
-                    hrp.Velocity = Vector3.new(math.random(-a, a), math.random(-a, a), math.random(-a, a))
+                    local rv = Vector3.new(math.random(-a, a), math.random(-a, a), math.random(-a, a))
+                    local t0 = os.clock()
+                    hrp.Velocity = rv
                     RSVC.RenderStepped:Wait()
+                    local dtw = math.max(os.clock() - t0, 0.0001)
                     hrp.Velocity = v
+                    -- Same client-cleanup as spoofing: undo the fake travel
+                    local cur = hrp.CFrame
+                    hrp.CFrame = cur - (rv - v) * dtw
                 end)
             end
         else
