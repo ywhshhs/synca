@@ -1557,6 +1557,69 @@ local RSVC = game:GetService("RunService")
 -- Movement engine: velocity mode (default, replicates naturally) or CFrame
 -- teleport mode. Refs re-fetched every tick so respawns just work.
 local speedOrig, speedApplied = nil, false
+local jumpOrig, jumpApplied = nil, false
+local wsHum, wsConn = nil, nil
+local infJumpLast = 0
+local flyHelper, flyBV, flyBG, flyChar = nil, nil, nil, nil
+
+-- Fly rig (Nameless pattern): invisible helper part welded to the root with
+-- BodyVelocity + BodyGyro inside it, humanoid PlatformStanding so the
+-- controller can't strip our motion. Constraint forces beat per-tick
+-- velocity writes that custom controllers overwrite.
+local function flyCleanup()
+    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
+    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
+    if flyHelper then pcall(function() flyHelper:Destroy() end) flyHelper = nil end
+    flyChar = nil
+    pcall(function()
+        local ch = LocalPlayer.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end)
+end
+local function flyEnsure(hrp)
+    if flyHelper and flyHelper.Parent and flyBV and flyBV.Parent and flyBG and flyBG.Parent then
+        return true
+    end
+    flyCleanup()
+    local ok, helper = pcall(function()
+        local p = Instance.new("Part")
+        p.Name = "syncaFly"
+        p.Size = Vector3.new(0.2, 0.2, 0.2)
+        p.Transparency = 1
+        p.CanCollide = false
+        p.CanQuery = false
+        p.CanTouch = false
+        p.Massless = true
+        p.Parent = workspace
+        return p
+    end)
+    if not ok or not helper then return false end
+    local okw = pcall(function()
+        local w = Instance.new("Weld")
+        w.Part0 = helper
+        w.Part1 = hrp
+        w.C0 = CFrame.new(0, 0, 0)
+        w.Parent = helper
+    end)
+    if not okw then pcall(function() helper:Destroy() end) return false end
+    pcall(function()
+        local bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.Parent = helper
+        flyBV = bv
+        local bg = Instance.new("BodyGyro")
+        bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        bg.P = 90000
+        bg.D = 100
+        bg.Parent = helper
+        flyBG = bg
+    end)
+    if not (flyBV and flyBG) then flyCleanup() return false end
+    flyHelper = helper
+    return true
+end
 onPhysicsStep(function(dt)
     pcall(function()
         if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) and next(noclipOrig) == nil then return end
@@ -1565,16 +1628,36 @@ onPhysicsStep(function(dt)
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not ch or not hrp or not hum then return end
         if C.JumpPower then
+            if not jumpApplied then jumpOrig = hum.JumpPower jumpApplied = true end
             hum.UseJumpPower = true
             hum.JumpPower = C.JumpPowerAmount
+        elseif jumpApplied then
+            jumpApplied = false
+            if hum and jumpOrig then pcall(function() hum.JumpPower = jumpOrig end) end
+            jumpOrig = nil
         end
         -- WalkSpeed assist: custom character controllers own velocity and
         -- would ignore our writes, but almost all of them scale WalkSpeed.
         if C.Speed and hum then
             if not speedApplied then speedOrig = hum.WalkSpeed speedApplied = true end
             hum.WalkSpeed = C.SpeedAmount
+            -- Loop WalkSpeed (Nameless loopws): re-apply the instant anything
+            -- external changes it, so anticheat resets lose the race.
+            if wsHum ~= hum then
+                if wsConn then pcall(function() wsConn:Disconnect() end) end
+                wsHum = hum
+                pcall(function()
+                    wsConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+                        if C.Speed and hum.Parent and hum.WalkSpeed ~= C.SpeedAmount then
+                            hum.WalkSpeed = C.SpeedAmount
+                        end
+                    end)
+                end)
+            end
         elseif speedApplied then
             speedApplied = false
+            if wsConn then pcall(function() wsConn:Disconnect() end) wsConn = nil end
+            wsHum = nil
             if hum and speedOrig then pcall(function() hum.WalkSpeed = speedOrig end) end
             speedOrig = nil
         end
@@ -1601,15 +1684,25 @@ onPhysicsStep(function(dt)
             if dir.Magnitude > 1 then dir = dir.Unit end
             if C.MoveMethod == "CFrame" then
                 hrp.CFrame += dir * C.FlySpeed * (dt or 0.016)
+                if flyHelper or flyChar then flyCleanup() flyChar = nil end
             else
-                hrp.AssemblyLinearVelocity = dir * C.FlySpeed
+                if flyChar ~= ch then flyCleanup() flyChar = ch end
+                hum.PlatformStand = true
+                if flyEnsure(hrp) then
+                    flyBV.Velocity = dir * C.FlySpeed
+                    local cam = workspace.CurrentCamera
+                    if cam then flyBG.CFrame = cam.CFrame end
+                end
             end
-        elseif C.Speed and md.Magnitude > 0.01 then
-            if C.MoveMethod == "CFrame" then
-                hrp.CFrame += md * C.SpeedAmount * (dt or 0.016)
-            else
-                local v = hrp.AssemblyLinearVelocity
-                hrp.AssemblyLinearVelocity = Vector3.new(md.X * C.SpeedAmount, v.Y, md.Z * C.SpeedAmount)
+        else
+            if flyHelper or flyChar then flyCleanup() flyChar = nil end
+            if C.Speed and md.Magnitude > 0.01 then
+                if C.MoveMethod == "CFrame" then
+                    hrp.CFrame += md * C.SpeedAmount * (dt or 0.016)
+                else
+                    local v = hrp.AssemblyLinearVelocity
+                    hrp.AssemblyLinearVelocity = Vector3.new(md.X * C.SpeedAmount, v.Y, md.Z * C.SpeedAmount)
+                end
             end
         end
     end)
@@ -1618,14 +1711,21 @@ end)
 -- Infinite Jump: single global connection, gated on the flag
 UIS.JumpRequest:Connect(function()
     if not C.InfJump then return end
+    if os.clock() - infJumpLast < 0.25 then return end
     local ch = LocalPlayer.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-    if hum and not hum.Seated then
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-        -- CFrame lift fallback: controller-owned humanoids ignore state
-        -- changes, but nothing ignores a position write.
-        local hrp = ch:FindFirstChild("HumanoidRootPart")
-        if hrp then hrp.CFrame += Vector3.new(0, 3, 0) end
+    if not hum or hum.Seated or hum.Health <= 0 then return end
+    infJumpLast = os.clock()
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    -- Launch impulse (Nameless LaunchHumanoid): upward velocity from jump
+    -- power survives controllers that swallow state changes.
+    local hrp = ch:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        local jp = (hum.JumpPower and hum.JumpPower > 0) and hum.JumpPower or 50
+        pcall(function()
+            local v = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = Vector3.new(v.X, math.max(v.Y, jp), v.Z)
+        end)
     end
 end)
 
