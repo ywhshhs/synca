@@ -1753,6 +1753,11 @@ task.spawn(function()
                     -- your screen continues exactly as if spoof never ran.
                     hrp.CFrame = cf0 + v * dtw
                 end)
+            else
+                -- Yield on EVERY path: a skip without a wait starves the
+                -- scheduler and hard-freezes the game (e.g. while dead or
+                -- walking, when the spoof correctly stands down).
+                task.wait(0.03)
             end
         else
             task.wait(0.05)
@@ -1805,6 +1810,8 @@ task.spawn(function()
                     hrp.Velocity = v
                     hrp.CFrame = cf0 + v * dtw
                 end)
+            else
+                task.wait(0.03)
             end
         else
             task.wait(0.05)
