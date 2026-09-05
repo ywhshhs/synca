@@ -58,6 +58,15 @@ local C = {
     BoxFillColor = Color3.fromRGB(255, 255, 255),
     BoxFillOpacity = 30,
     TeamColors = false,
+    Fly = false,
+    FlySpeed = 60,
+    Speed = false,
+    SpeedAmount = 40,
+    JumpPower = false,
+    JumpPowerAmount = 50,
+    InfJump = false,
+    Noclip = false,
+    CFrameMode = false,
     Resolver = false,
     ResolverRate = 60,
     PredictionVertical = 0.13,
@@ -206,6 +215,7 @@ local KeybindList = Library:KeybindList()
 
 local CombatTab = Window:Page({Name = "Combat", Columns = 2, Subtabs = false})
 local VisualsTab = Window:Page({Name = "Visuals", Columns = 2, Subtabs = false})
+local MovementTab = Window:Page({Name = "Movement", Columns = 2, Subtabs = false})
 local SettingsTab = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
 -- Sections
@@ -556,6 +566,47 @@ TracerSection:Slider({Name = "Tracer Opacity", Min = 0, Max = 100, Default = 100
 end})
 
 local CrossSection = VisualsTab:Section({Name = "Crosshair", Side = 2})
+local FlySection = MovementTab:Section({Name = "Fly", Side = 1})
+local SpeedSection = MovementTab:Section({Name = "Speed", Side = 2})
+local JumpSection = MovementTab:Section({Name = "Jump", Side = 1})
+
+FlySection:Toggle({Name = "Fly", Flag = "Fly", Default = false, Callback = function(Value)
+    C.Fly = Value
+end})
+
+FlySection:Slider({Name = "Fly Speed", Min = 10, Max = 200, Default = 60, Suffix = " studs/s", Decimals = 1, Flag = "FlySpeed", Callback = function(Value)
+    C.FlySpeed = Value
+end})
+
+SpeedSection:Toggle({Name = "Speed", Flag = "Speed", Default = false, Callback = function(Value)
+    C.Speed = Value
+end})
+
+SpeedSection:Slider({Name = "Speed Amount", Min = 0, Max = 200, Default = 40, Suffix = " studs/s", Decimals = 1, Flag = "SpeedAmount", Callback = function(Value)
+    C.SpeedAmount = Value
+end})
+
+-- CFrame teleports work where velocity gets stripped; velocity (default)
+-- rides physics and replicates naturally, so it draws less attention
+SpeedSection:Toggle({Name = "CFrame Mode", Flag = "CFrameMode", Default = false, Callback = function(Value)
+    C.CFrameMode = Value
+end})
+
+SpeedSection:Toggle({Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(Value)
+    C.Noclip = Value
+end})
+
+JumpSection:Toggle({Name = "Jump Power", Flag = "JumpPower", Default = false, Callback = function(Value)
+    C.JumpPower = Value
+end})
+
+JumpSection:Slider({Name = "Jump Power Amount", Min = 0, Max = 300, Default = 50, Suffix = "", Decimals = 1, Flag = "JumpPowerAmount", Callback = function(Value)
+    C.JumpPowerAmount = Value
+end})
+
+JumpSection:Toggle({Name = "Infinite Jump", Flag = "InfJump", Default = false, Callback = function(Value)
+    C.InfJump = Value
+end})
 
 CrossSection:Toggle({Name = "Crosshair", Flag = "Crosshair", Default = false, Callback = function(Value)
     C.Crosshair = Value
@@ -1406,6 +1457,58 @@ end)
 
 -- Shared RunService handle for the velocity spoof / fake lag loops below.
 local RSVC = game:GetService("RunService")
+
+-- Movement engine: velocity mode (default, replicates naturally) or CFrame
+-- teleport mode. Refs re-fetched every tick so respawns just work.
+RSVC.Heartbeat:Connect(function(dt)
+    pcall(function()
+        if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) then return end
+        local ch = LocalPlayer.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if not ch or not hrp or not hum then return end
+        if C.JumpPower then
+            hum.UseJumpPower = true
+            hum.JumpPower = C.JumpPowerAmount
+        end
+        if C.Noclip then
+            for _, p in ipairs(ch:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end
+        if hum.Seated then return end
+        local md = hum.MoveDirection
+        if C.Fly then
+            local y = 0
+            if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) then y = 1
+            elseif UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) then y = -1 end
+            local dir = Vector3.new(md.X, y, md.Z)
+            if dir.Magnitude > 1 then dir = dir.Unit end
+            if C.CFrameMode then
+                hrp.CFrame += dir * C.FlySpeed * (dt or 0.016)
+            else
+                hrp.AssemblyLinearVelocity = dir * C.FlySpeed
+            end
+        elseif C.Speed and md.Magnitude > 0.01 then
+            if C.CFrameMode then
+                hrp.CFrame += md * C.SpeedAmount * (dt or 0.016)
+            else
+                local v = hrp.AssemblyLinearVelocity
+                hrp.AssemblyLinearVelocity = Vector3.new(md.X * C.SpeedAmount, v.Y, md.Z * C.SpeedAmount)
+            end
+        end
+    end)
+end)
+
+-- Infinite Jump: single global connection, gated on the flag
+UIS.JumpRequest:Connect(function()
+    if not C.InfJump then return end
+    local ch = LocalPlayer.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    if hum and not hum.Seated then
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
+end)
 
 
 -- Triggerbot click: executor press first, held-tool fallback for touch.
