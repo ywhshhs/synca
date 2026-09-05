@@ -84,6 +84,8 @@ local C = {
     FakeLagInterval = 0.2,
     VelDesync = false,
     VelDesyncRange = 2,
+    UndergroundDepth = 6,
+    AntiVoid = true,
     Desync = false,
     DesyncMode = "Void",
     VoidTime = 0.4,
@@ -569,8 +571,17 @@ MiscSection:Toggle({Name = "Velocity Desync", Flag = "VelDesync", Default = fals
     C.VelDesync = Value
 end})
 
-MiscSection:Slider({Name = "Desync Range", Min = 1, Max = 10, Default = 2, Suffix = "k", Decimals = 1, Flag = "VelDesyncRange", Callback = function(Value)
+MiscSection:Slider({Name = "Velocity Range", Min = 1, Max = 10, Default = 2, Suffix = "k", Decimals = 1, Flag = "VelDesyncRange", Callback = function(Value)
     C.VelDesyncRange = Value
+end})
+
+MiscSection:Slider({Name = "Underground Depth", Min = 1, Max = 30, Default = 6, Suffix = " studs", Decimals = 1, Flag = "UndergroundDepth", Callback = function(Value)
+    C.UndergroundDepth = Value
+end})
+
+MiscSection:Toggle({Name = "Anti Void", Flag = "AntiVoid", Default = true, Callback = function(Value)
+    C.AntiVoid = Value
+    applyAntiVoid(Value)
 end})
 
 -- Desync (csync-style): server replicates a flung/fake body while your
@@ -1690,16 +1701,16 @@ task.spawn(function()
                     else
                         sv = Vector3.new(0, 0, 0)
                     end
+                    local cf0 = hrp.CFrame
                     local t0 = os.clock()
                     hrp.Velocity = sv
                     RSVC.RenderStepped:Wait()
                     local dtw = math.max(os.clock() - t0, 0.0001)
                     hrp.Velocity = v
-                    -- Erase the spoofed displacement locally (server already
-                    -- got the packet): subtract what the fake velocity added
-                    -- so your screen never jumps while the server sees fake.
-                    local cur = hrp.CFrame
-                    hrp.CFrame = cur - (sv - v) * dtw
+                    -- True csync restore: advance from the pre-spoof pose by
+                    -- your REAL velocity only. Server got the fake packet;
+                    -- your screen continues exactly as if spoof never ran.
+                    hrp.CFrame = cf0 + v * dtw
                 end)
             end
         else
@@ -1743,20 +1754,32 @@ task.spawn(function()
                     local v = hrp.Velocity
                     local a = math.floor(C.VelDesyncRange * 1000)
                     local rv = Vector3.new(math.random(-a, a), math.random(-a, a), math.random(-a, a))
+                    local cf0 = hrp.CFrame
                     local t0 = os.clock()
                     hrp.Velocity = rv
                     RSVC.RenderStepped:Wait()
                     local dtw = math.max(os.clock() - t0, 0.0001)
                     hrp.Velocity = v
-                    -- Same client-cleanup as spoofing: undo the fake travel
-                    local cur = hrp.CFrame
-                    hrp.CFrame = cur - (rv - v) * dtw
+                    hrp.CFrame = cf0 + v * dtw
                 end)
             end
         else
             task.wait(0.05)
         end
     end
+end)
+
+-- Anti Void: NaN kill-height disables local fall destruction (server keeps
+-- its own). Applied on launch, on respawn, and every tick while desync runs.
+local function applyAntiVoid(on)
+    pcall(function()
+        workspace.FallenPartsDestroyHeight = on and (-0 / 0) or -500
+    end)
+end
+applyAntiVoid(C.AntiVoid)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if C.AntiVoid then applyAntiVoid(true) end
 end)
 
 -- Desync engine (csync pattern): each tick saves the real CFrame, teleports
@@ -1879,12 +1902,14 @@ RSVC.Heartbeat:Connect(function()
             if desyncVoidPhase then
                 target = CFrame.new(old.Position + Vector3.new(math.random(-900000000, 900000000), math.random(100000000, 900000000), math.random(-900000000, 900000000)))
             end
-        else -- Underground: 6 studs down, pitched flat
-            target = CFrame.new(old.Position - Vector3.new(0, 6, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
+        else -- Underground: configurable depth down, pitched flat
+            target = CFrame.new(old.Position - Vector3.new(0, C.UndergroundDepth, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
         end
+        if C.AntiVoid or C.Desync then applyAntiVoid(true) end
         root.CFrame = target
         if desyncSetback then
-            desyncSetback.CFrame = old
+            -- +1.5Y: a Part subject frames lower than a Humanoid one does
+            desyncSetback.CFrame = old + Vector3.new(0, 1.5, 0)
             local cam = workspace.CurrentCamera
             if cam and hum then cam.CameraSubject = desyncSetback end
         end
