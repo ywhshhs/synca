@@ -66,7 +66,7 @@ local C = {
     JumpPowerAmount = 50,
     InfJump = false,
     Noclip = false,
-    CFrameMode = false,
+    MoveMethod = "Velocity",
     Resolver = false,
     ResolverRate = 60,
     PredictionVertical = 0.13,
@@ -77,13 +77,6 @@ local C = {
     TargetDot = false,
     TargetDotSize = 6,
     TargetDotFilled = true,
-    SpoofVelocity = false,
-    SpoofType = "Prediction Breaker",
-    SpoofStrength = 500,
-    FakeLag = false,
-    FakeLagInterval = 0.2,
-    VelDesync = false,
-    VelDesyncRange = 2,
     UndergroundDepth = 6,
     Desync = false,
     DesyncMode = "Void",
@@ -254,26 +247,6 @@ local function onPhysicsStep(fn)
     end)
     if not ok then _rs.Heartbeat:Connect(fn) end
 end
-
--- Spoof position ghost: velocity tricks keep the body near its real spot,
--- so this marker shows approximately where the server sees you while
--- spoofing or velocity-desyncing. Client-only, never collides.
-local spoofMarker = nil
-pcall(function()
-    local m = Instance.new("Part")
-    m.Name = "syncaSpoofMarker"
-    m.Anchored = true
-    m.CanCollide = false
-    m.CanQuery = false
-    m.CanTouch = false
-    m.Transparency = 1
-    m.Material = Enum.Material.Neon
-    m.Color = Color3.fromRGB(255, 150, 0)
-    m.Size = Vector3.new(3, 5, 2)
-    m.CFrame = CFrame.new(0, -100, 0)
-    m.Parent = workspace
-    spoofMarker = m
-end)
 
 -- Mobile fly controls: the thumbstick already drives Humanoid.MoveDirection
 -- (so steering works on touch), but vertical has no keys there. These
@@ -571,37 +544,6 @@ end})
 
 local MiscSection = CombatTab:Section({Name = "Movement", Side = 2})
 
--- Velocity Spoof: what the server sees for your velocity (masking)
-MiscSection:Toggle({Name = "Velocity Spoof", Flag = "SpoofVelocity", Default = false, Callback = function(Value)
-    C.SpoofVelocity = Value
-end})
-
-MiscSection:Dropdown({Name = "Spoof Type", Flag = "SpoofType", Default = "Prediction Breaker", Items = {"Prediction Breaker", "Underground", "Sky"}, Callback = function(Value)
-    C.SpoofType = Value
-end})
-
-MiscSection:Slider({Name = "Spoof Strength", Min = 50, Max = 2000, Default = 500, Suffix = " vel", Decimals = 1, Flag = "SpoofStrength", Callback = function(Value)
-    C.SpoofStrength = Value
-end})
-
--- Fake Lag: chop replication via NetworkIsSleeping (executor-gated)
-MiscSection:Toggle({Name = "Fake Lag", Flag = "FakeLag", Default = false, Callback = function(Value)
-    C.FakeLag = Value
-end})
-
-MiscSection:Slider({Name = "Lag Interval", Min = 0.05, Max = 1, Default = 0.2, Suffix = "s", Decimals = 2, Flag = "FakeLagInterval", Callback = function(Value)
-    C.FakeLagInterval = Value
-end})
-
--- Velocity Desync: randomize replicated velocity each tick, then restore
-MiscSection:Toggle({Name = "Velocity Desync", Flag = "VelDesync", Default = false, Callback = function(Value)
-    C.VelDesync = Value
-end})
-
-MiscSection:Slider({Name = "Velocity Range", Min = 1, Max = 10, Default = 2, Suffix = "k", Decimals = 1, Flag = "VelDesyncRange", Callback = function(Value)
-    C.VelDesyncRange = Value
-end})
-
 MiscSection:Slider({Name = "Underground Depth", Min = 1, Max = 30, Default = 6, Suffix = " studs", Decimals = 1, Flag = "UndergroundDepth", Callback = function(Value)
     C.UndergroundDepth = Value
 end})
@@ -739,10 +681,10 @@ SpeedSection:Slider({Name = "Speed Amount", Min = 0, Max = 200, Default = 40, Su
     C.SpeedAmount = Value
 end})
 
--- CFrame teleports work where velocity gets stripped; velocity (default)
--- rides physics and replicates naturally, so it draws less attention
-SpeedSection:Toggle({Name = "CFrame Mode", Flag = "CFrameMode", Default = false, Callback = function(Value)
-    C.CFrameMode = Value
+-- Velocity rides physics and replicates naturally (stealthier); CFrame
+-- teleports work where velocity gets stripped
+SpeedSection:Dropdown({Name = "Movement Method", Flag = "MoveMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
+    C.MoveMethod = Value
 end})
 
 SpeedSection:Toggle({Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(Value)
@@ -1657,13 +1599,13 @@ onPhysicsStep(function(dt)
             elseif UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) or flyDownHeld then y = -1 end
             local dir = Vector3.new(md.X, y, md.Z)
             if dir.Magnitude > 1 then dir = dir.Unit end
-            if C.CFrameMode then
+            if C.MoveMethod == "CFrame" then
                 hrp.CFrame += dir * C.FlySpeed * (dt or 0.016)
             else
                 hrp.AssemblyLinearVelocity = dir * C.FlySpeed
             end
         elseif C.Speed and md.Magnitude > 0.01 then
-            if C.CFrameMode then
+            if C.MoveMethod == "CFrame" then
                 hrp.CFrame += md * C.SpeedAmount * (dt or 0.016)
             else
                 local v = hrp.AssemblyLinearVelocity
@@ -1719,105 +1661,6 @@ local function resolveTriggerTarget()
     if C.TriggerLock and AIMBOT.Target ~= player then return nil end
     return player
 end
-
--- Velocity Spoof: what the server sees for your velocity (masking).
--- Restored every tick so your client never feels it.
-task.spawn(function()
-    while true do
-        if C.SpoofVelocity then
-            local ch = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            local hum0 = ch and ch:FindFirstChildOfClass("Humanoid")
-            -- Pause while moving or seated: spoofing must never fight your
-            -- own locomotion (that tug-of-war is what froze movement).
-            local heldStill = not hum0 or (hum0.MoveDirection.Magnitude < 0.1 and not hum0.Seated)
-            if hrp and heldStill then
-                pcall(function()
-                    local v = hrp.Velocity
-                    local sv = v
-                    if C.SpoofType == "Underground" then
-                        sv = v + Vector3.new(0, -C.SpoofStrength, 0)
-                    elseif C.SpoofType == "Sky" then
-                        sv = v + Vector3.new(0, C.SpoofStrength, 0)
-                    else
-                        sv = Vector3.new(0, 0, 0)
-                    end
-                    local cf0 = hrp.CFrame
-                    local t0 = os.clock()
-                    hrp.Velocity = sv
-                    RSVC.RenderStepped:Wait()
-                    local dtw = math.max(os.clock() - t0, 0.0001)
-                    hrp.Velocity = v
-                    -- True csync restore: advance from the pre-spoof pose by
-                    -- your REAL velocity only. Server got the fake packet;
-                    -- your screen continues exactly as if spoof never ran.
-                    hrp.CFrame = cf0 + v * dtw
-                end)
-            else
-                -- Yield on EVERY path: a skip without a wait starves the
-                -- scheduler and hard-freezes the game (e.g. while dead or
-                -- walking, when the spoof correctly stands down).
-                task.wait(0.03)
-            end
-        else
-            task.wait(0.05)
-        end
-    end
-end)
-
--- Fake Lag: chop replication by sleeping network ownership on an interval.
--- Executor-gated (sethiddenproperty); refuses silently where missing.
-task.spawn(function()
-    local sleeping, lastFlip = false, 0
-    while true do
-        if C.FakeLag and typeof(sethiddenproperty) == "function" then
-            local ch = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if hrp and os.clock() - lastFlip >= C.FakeLagInterval then
-                lastFlip = os.clock()
-                sleeping = not sleeping
-                pcall(sethiddenproperty, hrp, "NetworkIsSleeping", sleeping)
-            end
-        elseif sleeping then
-            sleeping = false
-            local ch = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if hrp then pcall(sethiddenproperty, hrp, "NetworkIsSleeping", false) end
-        end
-        task.wait(0.03)
-    end
-end)
-
--- Velocity Desync: randomize replicated velocity each tick, then restore.
--- Breaks enemy prediction against you.
-task.spawn(function()
-    while true do
-        if C.VelDesync then
-            local ch = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            local hum0 = ch and ch:FindFirstChildOfClass("Humanoid")
-            local heldStill = not hum0 or (hum0.MoveDirection.Magnitude < 0.1 and not hum0.Seated)
-            if hrp and heldStill then
-                pcall(function()
-                    local v = hrp.Velocity
-                    local a = math.floor(C.VelDesyncRange * 1000)
-                    local rv = Vector3.new(math.random(-a, a), math.random(-a, a), math.random(-a, a))
-                    local cf0 = hrp.CFrame
-                    local t0 = os.clock()
-                    hrp.Velocity = rv
-                    RSVC.RenderStepped:Wait()
-                    local dtw = math.max(os.clock() - t0, 0.0001)
-                    hrp.Velocity = v
-                    hrp.CFrame = cf0 + v * dtw
-                end)
-            else
-                task.wait(0.03)
-            end
-        else
-            task.wait(0.05)
-        end
-    end
-end)
 
 applyAntiVoid()
 
@@ -2013,23 +1856,6 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         fovCircle.Visible = C.FOV
         fovFill.Visible = C.FOV and C.FOVFilled
         fovOutline.Visible = C.FOV and C.FOVOutline
-
-        -- Spoof position ghost follows your real body while either velocity
-        -- trick is armed (server sees you roughly there).
-        if spoofMarker then
-            if C.SpoofVelocity or C.VelDesync then
-                local sch = LocalPlayer.Character
-                local shrp = sch and sch:FindFirstChild("HumanoidRootPart")
-                if shrp then
-                    spoofMarker.CFrame = shrp.CFrame
-                    spoofMarker.Transparency = 0.5
-                else
-                    spoofMarker.Transparency = 1
-                end
-            else
-                spoofMarker.Transparency = 1
-            end
-        end
 
         -- Crosshair overlay at screen center
         pcall(function()
