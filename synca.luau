@@ -210,20 +210,29 @@ end)
 -- absorb property reads as nil, so typeof check distinguishes them).
 local HAS_DRAWING = typeof(fovCircle.Visible) == "boolean"
 
--- Noclip applier (Nameless-style): records original collision once per
--- character and forces it off, skipping redundant writes. Called immediately
--- on toggle plus every physics tick, so no simulation step ever sees it.
-local noclipOrig = {}
-local noclipChar = nil
-local function applyNoclip()
+-- Noclip (Nameless Admin pattern, rewritten from scratch): originals live in
+-- a weak table (dead parts evaporate on their own). step() records originals
+-- once and forces everything off, skipping redundant writes. unclip()
+-- restores originals exactly (clip/unnoclip symmetry). Step runs immediately
+-- on toggle plus every PreSimulation tick, so no physics step ever sees it.
+local noclipOrig = setmetatable({}, { __mode = "k" })
+local function noclipStep()
+    if not C.Noclip then return end
     local ok, ch = pcall(function() return game:GetService("Players").LocalPlayer.Character end)
     if not ok or not ch then return end
-    if noclipChar ~= ch then noclipOrig = {} noclipChar = ch end
     for _, part in ipairs(ch:GetDescendants()) do
         if part:IsA("BasePart") then
             if noclipOrig[part] == nil then noclipOrig[part] = part.CanCollide end
             if part.CanCollide == true then part.CanCollide = false end
         end
+    end
+end
+local function unclip()
+    for part, was in pairs(noclipOrig) do
+        if typeof(part) == "Instance" and part.Parent and part:IsA("BasePart") then
+            part.CanCollide = was == true
+        end
+        noclipOrig[part] = nil
     end
 end
 
@@ -705,7 +714,7 @@ end})
 
 SpeedSection:Toggle({Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(Value)
     C.Noclip = Value
-    if Value then pcall(applyNoclip) end
+    if Value then pcall(noclipStep) else pcall(unclip) end
 end})
 
 JumpSection:Toggle({Name = "Jump Power", Flag = "JumpPower", Default = false, Callback = function(Value)
@@ -1584,7 +1593,7 @@ onPhysicsStep(function(dt)
             hum.JumpPower = C.JumpPowerAmount
         end
         if C.Noclip then
-            applyNoclip()
+            noclipStep()
             -- Hover: phased-out body has no floor, so hold altitude instead
             -- of falling through the world (Ctrl/C or mobile down to sink)
             if not hum.Seated and not C.Fly then
@@ -1593,12 +1602,8 @@ onPhysicsStep(function(dt)
                 local vv = hrp.AssemblyLinearVelocity
                 hrp.AssemblyLinearVelocity = Vector3.new(vv.X, vy, vv.Z)
             end
-        elseif next(noclipOrig) ~= nil then
-            for part, was in pairs(noclipOrig) do
-                pcall(function() if part.Parent then part.CanCollide = was end end)
-            end
-            noclipOrig = {}
-            noclipChar = nil
+        else
+            unclip()
         end
         if hum.Seated then return end
         local md = hum.MoveDirection
@@ -1862,7 +1867,7 @@ RSVC.Heartbeat:Connect(function()
         local old = root.CFrame
         local target = old
         if C.DesyncMode == "Void" then
-            target = CFrame.new(old.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+            target = CFrame.new(old.Position + Vector3.new(math.random(-900000000, 900000000), math.random(100000000, 900000000), math.random(-900000000, 900000000)))
         elseif C.DesyncMode == "Pulse" then
             local now = os.clock()
             if desyncPhaseT == 0 then desyncPhaseT = now desyncVoidPhase = true end
@@ -1872,7 +1877,7 @@ RSVC.Heartbeat:Connect(function()
                 desyncVoidPhase = true desyncPhaseT = now
             end
             if desyncVoidPhase then
-                target = CFrame.new(old.Position + Vector3.new(math.random(-9e8, 9e8), math.random(1e8, 9e8), math.random(-9e8, 9e8)))
+                target = CFrame.new(old.Position + Vector3.new(math.random(-900000000, 900000000), math.random(100000000, 900000000), math.random(-900000000, 900000000)))
             end
         else -- Underground: 6 studs down, pitched flat
             target = CFrame.new(old.Position - Vector3.new(0, 6, 0)) * CFrame.Angles(math.pi / 2, 0, 0)
