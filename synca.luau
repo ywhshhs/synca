@@ -93,6 +93,11 @@ local C = {
     FoVRainbow = false,
     RainbowSpeed = 2,
     AimMethod = "Camera",
+    AimHold = false,
+    AimHeld = false,
+    ClosestPart = false,
+    Sticky = true,
+    FlyMethod = "Velocity",
     HeadDot = false,
     HeadDotColor = Color3.fromRGB(255, 255, 255),
     HeadDotSize = 4,
@@ -442,6 +447,11 @@ TargetSection:Dropdown({Name = "Target Part", Flag = "TargetPart", Default = "He
     C.TargetPart = Value
 end})
 
+-- Closest part: ignore the dropdown and aim the body part nearest the crosshair
+TargetSection:Toggle({Name = "Closest Part", Flag = "ClosestPart", Default = false, Callback = function(Value)
+    C.ClosestPart = Value
+end})
+
 -- Acquisition priority: nearest in 3D, nearest to crosshair, or weakest
 AimbotSection:Dropdown({Name = "Target Priority", Flag = "Priority", Default = "Closest", Items = {"Closest", "Cursor", "Lowest HP"}, Callback = function(Value)
     C.Priority = Value
@@ -450,6 +460,20 @@ end})
 -- Aim method: write the camera, or drive the real mouse (mousemoverel)
 AimbotSection:Dropdown({Name = "Aim Method", Flag = "AimMethod", Default = "Camera", Items = {"Camera", "Mouse"}, Callback = function(Value)
     C.AimMethod = Value
+end})
+
+-- Hold-to-aim: when on, the aimbot only drives while the aim key is held.
+-- Touch devices have no aim key, so the hold gate is skipped there.
+local AimHoldToggle = AimbotSection:Toggle({Name = "Hold to Aim", Flag = "AimHold", Default = false, Callback = function(Value)
+    C.AimHold = Value
+end})
+AimHoldToggle:Keybind({Name = "Aim Key", Flag = "AimKey", Default = Enum.UserInputType.MouseButton2, Mode = "Hold", Callback = function(Value)
+    C.AimHeld = Value
+end})
+
+-- Sticky lock: hold one target (look away to drop) vs re-pick best every frame
+AimbotSection:Toggle({Name = "Sticky Lock", Flag = "Sticky", Default = true, Callback = function(Value)
+    C.Sticky = Value
 end})
 
 -- Target highlight: one Highlight on the whole character model (every part)
@@ -693,6 +717,12 @@ FlySection:Slider({Name = "Fly Speed", Min = 10, Max = 200, Default = 60, Suffix
     C.FlySpeed = Value
 end})
 
+-- Fly's own method: Velocity rides physics (stealthier), CFrame teleports
+-- through anything. Falls back to the Speed method when unset (old configs).
+FlySection:Dropdown({Name = "Fly Method", Flag = "FlyMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
+    C.FlyMethod = Value
+end})
+
 SpeedSection:Toggle({Name = "Speed", Flag = "Speed", Default = false, Callback = function(Value)
     C.Speed = Value
 end})
@@ -703,7 +733,7 @@ end})
 
 -- Velocity rides physics and replicates naturally (stealthier); CFrame
 -- teleports work where velocity gets stripped
-SpeedSection:Dropdown({Name = "Movement Method", Flag = "MoveMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
+SpeedSection:Dropdown({Name = "Speed Method", Flag = "MoveMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
     C.MoveMethod = Value
 end})
 
@@ -846,6 +876,40 @@ local PART_ALIASES = {
 local function getAimPart(player)
     local char = player and player.Character
     if not char then return nil, nil end
+    -- Closest-part mode: aim whichever hittable part sits nearest the
+    -- crosshair on screen (falls back to 3D distance when off-screen).
+    if C.ClosestPart then
+        local cam = workspace.CurrentCamera
+        local anchor = getFovCenter()
+        local bestPos, bestPart, bestScore = nil, nil, math.huge
+        local seen = {}
+        for _, names in pairs(PART_ALIASES) do
+            for _, name in ipairs(names) do
+                if not seen[name] then
+                    seen[name] = true
+                    local part = char:FindFirstChild(name)
+                    if part then
+                        local score
+                        if cam then
+                            local sp, on = cam:WorldToViewportPoint(part.Position)
+                            if on then
+                                score = math.sqrt((sp.X - anchor.X)^2 + (sp.Y - anchor.Y)^2)
+                            else
+                                score = 1e9 + (cam.CFrame.Position - part.Position).Magnitude
+                            end
+                        else
+                            score = (part.Position - Vector3.new(0, 0, 0)).Magnitude
+                        end
+                        if score < bestScore then
+                            bestScore = score
+                            bestPos, bestPart = part.Position, part
+                        end
+                    end
+                end
+            end
+        end
+        if bestPos then return bestPos, bestPart end
+    end
     local aliases = PART_ALIASES[C.TargetPart] or PART_ALIASES["Head"]
     for _, name in ipairs(aliases) do
         local part = char:FindFirstChild(name)
@@ -959,6 +1023,7 @@ end
 local resolverPos = Vector3.new(0, 0, 0)
 local resolverTick = 0
 local resolverVel = Vector3.new(0, 0, 0)
+local resolverTarget = nil
 local lockDroppedAt = nil
 
 local function executeAim(target, dt)
@@ -976,14 +1041,26 @@ local function executeAim(target, dt)
     -- falling back to velocity for knocks, flings and physics-driven motion.
     -- Resolver: differentiate true velocity from position history while this
     -- target is held (immune to velocity spoofing), sampled at set rate.
+    -- Resets on target swap so the first frames never inherit the old
+    -- target's velocity; goes stale after 0.3s without a sample.
+    if target ~= resolverTarget then
+        resolverTarget, resolverTick, resolverVel = target, 0, Vector3.new(0, 0, 0)
+        if root then resolverPos = root.Position end
+    end
     if C.Resolver and root then
         local now = os.clock()
-        if resolverTick == 0 or (now - resolverTick) >= (1 / math.max(C.ResolverRate, 1)) then
+        if resolverTick == 0 then
+            resolverTick, resolverPos = now, root.Position
+        elseif (now - resolverTick) >= (1 / math.max((C.ResolverRate or 60), 1)) then
             local dtR = now - resolverTick
-            if dtR > 0 and resolverTick > 0 then
-                resolverVel = (root.Position - resolverPos) / dtR
+            if dtR > 0 then
+                local v = (root.Position - resolverPos) / dtR
+                -- Clamp teleport spikes (void desync can diff to 1e9/s).
+                if v.Magnitude < 500 then resolverVel = v end
             end
             resolverTick, resolverPos = now, root.Position
+        elseif (now - resolverTick) > 0.3 then
+            resolverVel = Vector3.new(0, 0, 0)
         end
     else
         resolverTick = 0
@@ -1004,9 +1081,13 @@ local function executeAim(target, dt)
     end
     local predictedPos = headPos
     if C.PredictionEnabled and C.Prediction > 0 and aimDir then
+        -- Scale the stud lead by target speed: quick strafers need more lead
+        -- than idlers, so the same slider behaves across movement speeds.
+        local spd = (C.Resolver and resolverTick > 0 and resolverVel.Magnitude > 0.5) and resolverVel.Magnitude or velocity.Magnitude
+        local scale = math.clamp(spd / 16, 0.4, 2.5)
         local hDir = Vector3.new(aimDir.X, 0, aimDir.Z)
         if hDir.Magnitude > 0.05 then
-            predictedPos += hDir.Unit * C.Prediction
+            predictedPos += hDir.Unit * (C.Prediction * scale)
         end
         local vy = (C.Resolver and resolverTick > 0) and resolverVel.Y or velocity.Y
         predictedPos += Vector3.new(0, vy * C.PredictionVertical, 0)
@@ -1056,9 +1137,32 @@ local function executeAim(target, dt)
 
     -- Higher smoothness = slower glide, 1 = instant snap. dt-corrected so the
     -- feel is identical at any frame rate (same glide at 30fps and 144fps).
-    local rate = 1 / math.max(C.Smoothness, 1)
-    local alpha = 1 - math.pow(1 - rate, (dt or 0.016) * 60)
-    cam.CFrame = cam.CFrame:Lerp(targetCF, math.clamp(alpha, 0, 1))
+    -- Horizontal and vertical glide separately: Smoothness steers yaw,
+    -- SmoothnessVertical steers pitch (1 = snap that axis).
+    local rateH = 1 / math.max((C.Smoothness or 10), 1)
+    local rateV = 1 / math.max((C.SmoothnessVertical or C.Smoothness or 10), 1)
+    local dt60 = (dt or 0.016) * 60
+    local alphaH = math.clamp(1 - math.pow(1 - rateH, dt60), 0, 1)
+    local alphaV = math.clamp(1 - math.pow(1 - rateV, dt60), 0, 1)
+    if alphaH == alphaV then
+        cam.CFrame = cam.CFrame:Lerp(targetCF, alphaH)
+    else
+        -- Split yaw/pitch: yaw glides on Smoothness, pitch on Vertical.
+        local pos = cam.CFrame.Position
+        local want = aimPos - pos
+        if want.Magnitude < 0.001 then return end
+        want = want.Unit
+        local cur = cam.CFrame.LookVector
+        local curYaw = Vector3.new(cur.X, 0, cur.Z)
+        local wantYaw = Vector3.new(want.X, 0, want.Z)
+        local yawVec = want
+        if curYaw.Magnitude > 0.001 and wantYaw.Magnitude > 0.001 then
+            yawVec = curYaw.Unit:Lerp(wantYaw.Unit, alphaH)
+        end
+        if yawVec.Magnitude < 0.001 then yawVec = want end
+        local yawCF = CFrame.lookAt(pos, pos + yawVec)
+        cam.CFrame = CFrame.new(pos, pos + yawCF.LookVector:Lerp(targetCF.LookVector, alphaV))
+    end
 end
 
 -- Single Highlight instance, reparented whenever the target changes. One Highlight
@@ -1577,7 +1681,10 @@ local RSVC = game:GetService("RunService")
 -- Movement engine: velocity mode (default, replicates naturally) or CFrame
 -- teleport mode. Refs re-fetched every tick so respawns just work.
 local speedOrig, speedApplied = nil, false
+local speedHum = nil
 local jumpOrig, jumpApplied = nil, false
+local jumpUsePowOrig = nil
+local jumpHum = nil
 local wsHum, wsConn = nil, nil
 local infJumpLast = 0
 local flyHelper, flyBV, flyBG, flyChar = nil, nil, nil, nil
@@ -1640,27 +1747,54 @@ local function flyEnsure(hrp)
     flyHelper = helper
     return true
 end
-onPhysicsStep(function(dt)
+-- One movement tick: safe to run from PreSimulation AND Heartbeat.
+-- Restores ALWAYS run first so turning a toggle off can never leave its
+-- effect stuck (the old early-return skipped restores when all toggles
+-- were off, which is why JumpPower/WalkSpeed/fly rig survived disable).
+local function movementTick(dt)
     pcall(function()
-        if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) and next(noclipOrig) == nil then return end
         local ch = LocalPlayer.Character
         local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        if not ch or not hrp or not hum then return end
+        -- New life: drop saved originals tied to the old humanoid.
+        if hum ~= jumpHum and jumpApplied then
+            jumpApplied, jumpOrig, jumpUsePowOrig, jumpHum = false, nil, nil, nil
+        end
+        if hum ~= speedHum and speedApplied then
+            speedApplied, speedOrig, speedHum = false, nil, nil
+        end
+        if hum ~= wsHum and wsConn then
+            pcall(function() wsConn:Disconnect() end) wsConn, wsHum = nil, nil
+        end
+        if flyChar and flyChar ~= ch then flyCleanup() flyChar = nil end
+        if not ch or not hrp or not hum then
+            if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) then
+                if flyHelper or flyChar then flyCleanup() flyChar = nil end
+                unclip()
+            end
+            return
+        end
+        -- Jump power (saves + restores UseJumpPower too).
         if C.JumpPower then
-            if not jumpApplied then jumpOrig = hum.JumpPower jumpApplied = true end
+            if not jumpApplied then jumpOrig, jumpUsePowOrig, jumpHum = hum.JumpPower, hum.UseJumpPower, hum jumpApplied = true end
             hum.UseJumpPower = true
-            hum.JumpPower = C.JumpPowerAmount
+            hum.JumpPower = (C.JumpPowerAmount or 50)
         elseif jumpApplied then
             jumpApplied = false
-            if hum and jumpOrig then pcall(function() hum.JumpPower = jumpOrig end) end
-            jumpOrig = nil
+            local oh, ov = jumpHum, jumpUsePowOrig
+            if oh and oh.Parent then
+                if jumpOrig ~= nil then pcall(function() oh.JumpPower = jumpOrig end) end
+                if ov ~= nil then pcall(function() oh.UseJumpPower = ov end) end
+            elseif hum and jumpOrig ~= nil then
+                pcall(function() hum.JumpPower = jumpOrig end)
+            end
+            jumpOrig, jumpUsePowOrig, jumpHum = nil, nil, nil
         end
         -- WalkSpeed assist: custom character controllers own velocity and
         -- would ignore our writes, but almost all of them scale WalkSpeed.
         if C.Speed and hum then
-            if not speedApplied then speedOrig = hum.WalkSpeed speedApplied = true end
-            hum.WalkSpeed = C.SpeedAmount
+            if not speedApplied then speedOrig, speedHum, speedApplied = hum.WalkSpeed, hum, true end
+            hum.WalkSpeed = (C.SpeedAmount or 16)
             -- Loop WalkSpeed (Nameless loopws): re-apply the instant anything
             -- external changes it, so anticheat resets lose the race.
             if wsHum ~= hum then
@@ -1668,8 +1802,8 @@ onPhysicsStep(function(dt)
                 wsHum = hum
                 pcall(function()
                     wsConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-                        if C.Speed and hum.Parent and hum.WalkSpeed ~= C.SpeedAmount then
-                            hum.WalkSpeed = C.SpeedAmount
+                        if C.Speed and hum.Parent and hum.WalkSpeed ~= (C.SpeedAmount or 16) then
+                            hum.WalkSpeed = (C.SpeedAmount or 16)
                         end
                     end)
                 end)
@@ -1678,8 +1812,10 @@ onPhysicsStep(function(dt)
             speedApplied = false
             if wsConn then pcall(function() wsConn:Disconnect() end) wsConn = nil end
             wsHum = nil
-            if hum and speedOrig then pcall(function() hum.WalkSpeed = speedOrig end) end
-            speedOrig = nil
+            local oh = speedHum
+            if oh and oh.Parent and speedOrig ~= nil then pcall(function() oh.WalkSpeed = speedOrig end) end
+            if (not oh or oh ~= hum) and hum and speedOrig ~= nil then pcall(function() hum.WalkSpeed = speedOrig end) end
+            speedOrig, speedHum = nil, nil
         end
         if C.Noclip then
             noclipStep()
@@ -1694,38 +1830,72 @@ onPhysicsStep(function(dt)
         else
             unclip()
         end
-        if hum.Seated then return end
+        if hum.Seated then
+            if flyHelper or flyChar then flyCleanup() flyChar = nil end
+            return
+        end
         local md = hum.MoveDirection
+        local flyMethod = C.FlyMethod or C.MoveMethod or "Velocity"
+        local speedMethod = C.MoveMethod or "Velocity"
         if C.Fly then
             local y = 0
             if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) or flyUpHeld then y = 1
             elseif UIS:IsKeyDown(Enum.KeyCode.Q) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) or flyDownHeld then y = -1 end
-            local dir = Vector3.new(md.X, y, md.Z)
+            -- Camera-relative steering: thumbstick/keyboard dir follows look.
+            local cam = workspace.CurrentCamera
+            local move = md
+            if cam and md.Magnitude > 0.01 then
+                local fwd = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+                local rgt = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+                if fwd.Magnitude > 0.01 and rgt.Magnitude > 0.01 then
+                    fwd, rgt = fwd.Unit, rgt.Unit
+                    local rel = cam.CFrame:PointToObjectSpace(hrp.Position + md)
+                    move = (rgt * -rel.X) + (fwd * -rel.Z)
+                    if move.Magnitude > 1 then move = move.Unit end
+                end
+            end
+            local dir = Vector3.new(move.X, y, move.Z)
             if dir.Magnitude > 1 then dir = dir.Unit end
-            if C.MoveMethod == "CFrame" then
-                hrp.CFrame += dir * C.FlySpeed * (dt or 0.016)
+            if flyMethod == "CFrame" then
+                hrp.CFrame += dir * (C.FlySpeed or 60) * (dt or 0.016)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                 if flyHelper or flyChar then flyCleanup() flyChar = nil end
             else
                 if flyChar ~= ch then flyCleanup() flyChar = ch end
                 hum.PlatformStand = true
                 if flyEnsure(hrp) then
-                    flyBV.Velocity = dir * C.FlySpeed
-                    local cam = workspace.CurrentCamera
+                    flyBV.Velocity = dir * (C.FlySpeed or 60)
                     if cam then flyBG.CFrame = cam.CFrame end
+                else
+                    -- Constraint rig blocked: drive assembly velocity directly.
+                    local keepY = dir.Y * (C.FlySpeed or 60)
+                    hrp.AssemblyLinearVelocity = Vector3.new(dir.X * (C.FlySpeed or 60), keepY, dir.Z * (C.FlySpeed or 60))
                 end
             end
         else
             if flyHelper or flyChar then flyCleanup() flyChar = nil end
             if C.Speed and md.Magnitude > 0.01 then
-                if C.MoveMethod == "CFrame" then
-                    hrp.CFrame += md * C.SpeedAmount * (dt or 0.016)
+                if speedMethod == "CFrame" then
+                    hrp.CFrame += md * (C.SpeedAmount or 16) * (dt or 0.016)
                 else
                     local v = hrp.AssemblyLinearVelocity
-                    hrp.AssemblyLinearVelocity = Vector3.new(md.X * C.SpeedAmount, v.Y, md.Z * C.SpeedAmount)
+                    hrp.AssemblyLinearVelocity = Vector3.new(md.X * (C.SpeedAmount or 16), v.Y, md.Z * (C.SpeedAmount or 16))
                 end
             end
         end
     end)
+end
+onPhysicsStep(function(dt)
+    movementTick(dt)
+end)
+-- Heartbeat backup: controllers that strip PreSimulation velocity writes
+-- lose the race here instead (CFrame method needs no backup, it persists).
+RSVC.Heartbeat:Connect(function()
+    if not (C.Fly or C.Speed) then return end
+    local m = C.MoveMethod or "Velocity"
+    local fm = C.FlyMethod or m
+    if (C.Fly and fm == "CFrame") or ((not C.Fly) and C.Speed and m == "CFrame") then return end
+    movementTick(nil)
 end)
 
 -- Infinite Jump: single global connection, gated on the flag
@@ -2085,8 +2255,21 @@ game:GetService("RunService").RenderStepped:Connect(function(dt)
         -- hold a sticky lock on one target instead of re-picking closest every
         -- frame (that re-picking was the tug-of-war). The lock drops when the
         -- target dies, hides, or leaves the FOV/screen — look away to release.
-        if C.Enable then
-            if not isLockValid(AIMBOT.Lock) then
+        -- Hold-to-aim gates on the aim key (skipped on touch devices with no
+        -- keyboard); Sticky off re-picks the best target every frame.
+        local aimKeyOk = true
+        if C.AimHold then
+            pcall(function()
+                if UIS.KeyboardEnabled or UIS.MouseEnabled then
+                    aimKeyOk = C.AimHeld == true
+                end
+            end)
+        end
+        if C.Enable and aimKeyOk then
+            if (C.Sticky == false) then
+                AIMBOT.Lock = findClosestTarget()
+                lockDroppedAt = nil
+            elseif not isLockValid(AIMBOT.Lock) then
                 AIMBOT.Lock = nil
                 if C.RetargetDelay > 0 then
                     if lockDroppedAt == nil then lockDroppedAt = os.clock() end
