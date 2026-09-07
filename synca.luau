@@ -717,11 +717,7 @@ FlySection:Slider({Name = "Fly Speed", Min = 10, Max = 200, Default = 60, Suffix
     C.FlySpeed = Value
 end})
 
--- Fly's own method: Velocity rides physics (stealthier), CFrame teleports
--- through anything. Falls back to the Speed method when unset (old configs).
-FlySection:Dropdown({Name = "Fly Method", Flag = "FlyMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
-    C.FlyMethod = Value
-end})
+-- NOTE: fly is CFrame-only (velocity rigs get stripped in this game).
 
 SpeedSection:Toggle({Name = "Speed", Flag = "Speed", Default = false, Callback = function(Value)
     C.Speed = Value
@@ -731,11 +727,8 @@ SpeedSection:Slider({Name = "Speed Amount", Min = 0, Max = 200, Default = 40, Su
     C.SpeedAmount = Value
 end})
 
--- Velocity rides physics and replicates naturally (stealthier); CFrame
--- teleports work where velocity gets stripped
-SpeedSection:Dropdown({Name = "Speed Method", Flag = "MoveMethod", Default = "Velocity", Items = {"Velocity", "CFrame"}, Callback = function(Value)
-    C.MoveMethod = Value
-end})
+-- NOTE: speed is CFrame (+ WalkSpeed assist). Velocity writes get stripped
+-- in this game, so there is no method toggle anymore.
 
 SpeedSection:Toggle({Name = "Noclip", Flag = "Noclip", Default = false, Callback = function(Value)
     C.Noclip = Value
@@ -1678,8 +1671,8 @@ end)
 -- Shared RunService handle for the velocity spoof / fake lag loops below.
 local RSVC = game:GetService("RunService")
 
--- Movement engine: velocity mode (default, replicates naturally) or CFrame
--- teleport mode. Refs re-fetched every tick so respawns just work.
+-- Movement engine: CFrame-only (velocity writes get stripped in this game).
+-- Refs re-fetched every tick so respawns just work.
 local speedOrig, speedApplied = nil, false
 local speedHum = nil
 local jumpOrig, jumpApplied = nil, false
@@ -1687,70 +1680,19 @@ local jumpUsePowOrig = nil
 local jumpHum = nil
 local wsHum, wsConn = nil, nil
 local infJumpLast = 0
-local flyHelper, flyBV, flyBG, flyChar = nil, nil, nil, nil
+local flyPlatApplied, flyPlatHum = false, nil
 
--- Fly rig (Nameless pattern): invisible helper part welded to the root with
--- BodyVelocity + BodyGyro inside it, humanoid PlatformStanding so the
--- controller can't strip our motion. Constraint forces beat per-tick
--- velocity writes that custom controllers overwrite.
-local function flyCleanup()
-    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
-    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
-    if flyHelper then pcall(function() flyHelper:Destroy() end) flyHelper = nil end
-    flyChar = nil
+-- CFrame fly suspends the humanoid controller (PlatformStand) so gravity /
+-- custom controllers can't fight the teleport. Reset on disable always.
+local function flyPlatCleanup()
+    if not flyPlatApplied then return end
+    flyPlatApplied, flyPlatHum = false, nil
     pcall(function()
         local ch = LocalPlayer.Character
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if hum then hum.PlatformStand = false end
     end)
 end
-local function flyEnsure(hrp)
-    if flyHelper and flyHelper.Parent and flyBV and flyBV.Parent and flyBG and flyBG.Parent then
-        return true
-    end
-    flyCleanup()
-    local ok, helper = pcall(function()
-        local p = Instance.new("Part")
-        p.Name = "syncaFly"
-        p.Size = Vector3.new(0.2, 0.2, 0.2)
-        p.Transparency = 1
-        p.CanCollide = false
-        p.CanQuery = false
-        p.CanTouch = false
-        p.Massless = true
-        p.Parent = workspace
-        return p
-    end)
-    if not ok or not helper then return false end
-    local okw = pcall(function()
-        local w = Instance.new("Weld")
-        w.Part0 = helper
-        w.Part1 = hrp
-        w.C0 = CFrame.new(0, 0, 0)
-        w.Parent = helper
-    end)
-    if not okw then pcall(function() helper:Destroy() end) return false end
-    pcall(function()
-        local bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-        bv.Velocity = Vector3.new(0, 0, 0)
-        bv.Parent = helper
-        flyBV = bv
-        local bg = Instance.new("BodyGyro")
-        bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-        bg.P = 90000
-        bg.D = 100
-        bg.Parent = helper
-        flyBG = bg
-    end)
-    if not (flyBV and flyBG) then flyCleanup() return false end
-    flyHelper = helper
-    return true
-end
--- One movement tick: safe to run from PreSimulation AND Heartbeat.
--- Restores ALWAYS run first so turning a toggle off can never leave its
--- effect stuck (the old early-return skipped restores when all toggles
--- were off, which is why JumpPower/WalkSpeed/fly rig survived disable).
 local function movementTick(dt)
     pcall(function()
         local ch = LocalPlayer.Character
@@ -1766,10 +1708,12 @@ local function movementTick(dt)
         if hum ~= wsHum and wsConn then
             pcall(function() wsConn:Disconnect() end) wsConn, wsHum = nil, nil
         end
-        if flyChar and flyChar ~= ch then flyCleanup() flyChar = nil end
+        if hum ~= flyPlatHum and flyPlatApplied then
+            flyPlatApplied, flyPlatHum = false, nil
+        end
         if not ch or not hrp or not hum then
             if not (C.Fly or C.Speed or C.Noclip or C.JumpPower) then
-                if flyHelper or flyChar then flyCleanup() flyChar = nil end
+                flyPlatCleanup()
                 unclip()
             end
             return
@@ -1819,24 +1763,27 @@ local function movementTick(dt)
         end
         if C.Noclip then
             noclipStep()
-            -- Hover: phased-out body has no floor, so hold altitude instead
-            -- of falling through the world (Ctrl/C or mobile down to sink)
+            -- CFrame hover: phased-out body has no floor, so cancel the
+            -- fall each tick instead of sinking (Ctrl/C or mobile down
+            -- to sink on purpose). Reads velocity, writes CFrame only.
             if not hum.Seated and not C.Fly then
-                local vy = 0
-                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.C) or flyDownHeld then vy = -15 end
-                local vv = hrp.AssemblyLinearVelocity
-                hrp.AssemblyLinearVelocity = Vector3.new(vv.X, vy, vv.Z)
+                local step = (dt or 0.016)
+                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.C) or flyDownHeld then
+                    hrp.CFrame += Vector3.new(0, -15 * step, 0)
+                else
+                    local vy = 0
+                    pcall(function() vy = hrp.AssemblyLinearVelocity.Y end)
+                    if vy < -1 then hrp.CFrame += Vector3.new(0, -vy * step, 0) end
+                end
             end
         else
             unclip()
         end
         if hum.Seated then
-            if flyHelper or flyChar then flyCleanup() flyChar = nil end
+            flyPlatCleanup()
             return
         end
         local md = hum.MoveDirection
-        local flyMethod = C.FlyMethod or C.MoveMethod or "Velocity"
-        local speedMethod = C.MoveMethod or "Velocity"
         if C.Fly then
             local y = 0
             if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) or flyUpHeld then y = 1
@@ -1856,31 +1803,16 @@ local function movementTick(dt)
             end
             local dir = Vector3.new(move.X, y, move.Z)
             if dir.Magnitude > 1 then dir = dir.Unit end
-            if flyMethod == "CFrame" then
-                hrp.CFrame += dir * (C.FlySpeed or 60) * (dt or 0.016)
-                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                if flyHelper or flyChar then flyCleanup() flyChar = nil end
-            else
-                if flyChar ~= ch then flyCleanup() flyChar = ch end
-                hum.PlatformStand = true
-                if flyEnsure(hrp) then
-                    flyBV.Velocity = dir * (C.FlySpeed or 60)
-                    if cam then flyBG.CFrame = cam.CFrame end
-                else
-                    -- Constraint rig blocked: drive assembly velocity directly.
-                    local keepY = dir.Y * (C.FlySpeed or 60)
-                    hrp.AssemblyLinearVelocity = Vector3.new(dir.X * (C.FlySpeed or 60), keepY, dir.Z * (C.FlySpeed or 60))
-                end
-            end
+            -- CFrame-only: teleport along dir, controller suspended so
+            -- nothing fights it. No velocity writes at all.
+            hum.PlatformStand = true
+            flyPlatApplied, flyPlatHum = true, hum
+            hrp.CFrame += dir * (C.FlySpeed or 60) * (dt or 0.016)
         else
-            if flyHelper or flyChar then flyCleanup() flyChar = nil end
+            flyPlatCleanup()
             if C.Speed and md.Magnitude > 0.01 then
-                if speedMethod == "CFrame" then
-                    hrp.CFrame += md * (C.SpeedAmount or 16) * (dt or 0.016)
-                else
-                    local v = hrp.AssemblyLinearVelocity
-                    hrp.AssemblyLinearVelocity = Vector3.new(md.X * (C.SpeedAmount or 16), v.Y, md.Z * (C.SpeedAmount or 16))
-                end
+                -- CFrame-only speed (+ WalkSpeed assist above).
+                hrp.CFrame += md * (C.SpeedAmount or 16) * (dt or 0.016)
             end
         end
     end)
@@ -1888,17 +1820,9 @@ end
 onPhysicsStep(function(dt)
     movementTick(dt)
 end)
--- Heartbeat backup: controllers that strip PreSimulation velocity writes
--- lose the race here instead (CFrame method needs no backup, it persists).
-RSVC.Heartbeat:Connect(function()
-    if not (C.Fly or C.Speed) then return end
-    local m = C.MoveMethod or "Velocity"
-    local fm = C.FlyMethod or m
-    if (C.Fly and fm == "CFrame") or ((not C.Fly) and C.Speed and m == "CFrame") then return end
-    movementTick(nil)
-end)
 
--- Infinite Jump: single global connection, gated on the flag
+-- Infinite Jump (CFrame lift: velocity impulses get stripped in this game).
+-- Single global connection, gated on the flag.
 UIS.JumpRequest:Connect(function()
     if not C.InfJump then return end
     if os.clock() - infJumpLast < 0.25 then return end
@@ -1907,14 +1831,21 @@ UIS.JumpRequest:Connect(function()
     if not hum or hum.Seated or hum.Health <= 0 then return end
     infJumpLast = os.clock()
     pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-    -- Launch impulse (Nameless LaunchHumanoid): upward velocity from jump
-    -- power survives controllers that swallow state changes.
+    -- CFrame lift scaled off JumpPower (min-hop when unknown). Re-assert
+    -- the state shortly after for controllers that swallow the first one.
     local hrp = ch:FindFirstChild("HumanoidRootPart")
     if hrp then
-        local jp = (hum.JumpPower and hum.JumpPower > 0) and hum.JumpPower or 50
+        local lift = 2.2
         pcall(function()
-            local v = hrp.AssemblyLinearVelocity
-            hrp.AssemblyLinearVelocity = Vector3.new(v.X, math.max(v.Y, jp), v.Z)
+            if hum.JumpPower and hum.JumpPower > 0 then
+                lift = math.clamp(hum.JumpPower / 22, 1.5, 8)
+            end
+        end)
+        pcall(function() hrp.CFrame += Vector3.new(0, lift, 0) end)
+        task.delay(0.05, function()
+            pcall(function()
+                if C.InfJump and hum.Parent then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+            end)
         end)
     end
 end)
@@ -2104,28 +2035,11 @@ local function desyncTargetFor(old)
     end
 end
 
-RSVC.Heartbeat:Connect(function()
-    if not C.Desync then
-        if desyncWasOn then
-            desyncWasOn = false
-            desyncRestore()
-            pcall(function()
-                local cam = workspace.CurrentCamera
-                local ch = LocalPlayer.Character
-                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-                if cam and hum then cam.CameraSubject = hum end
-            end)
-            if desyncSetback then desyncSetback.CFrame = CFrame.new(0, -2000, 0) end
-            desyncClearGhost()
-            desyncTimer, desyncPhaseT = 0, 0
-            desyncVoidPhase = true
-            desyncTargetCF = nil
-        end
-        return
-    end
+-- Primary displace: runs post-physics so the SERVER snapshots the fake.
+-- Guarded: at most one displace per frame, restore owns the way back.
+local function desyncDisplace()
+    if not C.Desync or desyncDisplaced then return end
     desyncWasOn = true
-    -- Hitch guard: previous tick never got its pre-render restore.
-    if desyncDisplaced then desyncRestore() end
     pcall(function()
         local ch = LocalPlayer.Character
         if not ch then return end
@@ -2177,6 +2091,36 @@ RSVC.Heartbeat:Connect(function()
             for _, real in ipairs(dead) do desyncGhosts[real] = nil end
         end
     end)
+end
+
+RSVC.Heartbeat:Connect(function()
+    if not C.Desync then
+        if desyncWasOn then
+            desyncWasOn = false
+            desyncRestore()
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                local ch = LocalPlayer.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if cam and hum then cam.CameraSubject = hum end
+            end)
+            if desyncSetback then desyncSetback.CFrame = CFrame.new(0, -2000, 0) end
+            desyncClearGhost()
+            desyncTimer, desyncPhaseT = 0, 0
+            desyncVoidPhase = true
+            desyncTargetCF = nil
+        end
+        return
+    end
+    -- Hitch guard: a missed pre-render restore leaves the fake posed —
+    -- pull it back before faking again so the real pose never collapses.
+    if desyncDisplaced then desyncRestore() end
+    desyncDisplace()
+end)
+-- PostSimulation is the ideal displace point (right after physics, before
+-- the server snapshot). Heartbeat above stays as the executor fallback.
+pcall(function()
+    game:GetService("RunService").PostSimulation:Connect(desyncDisplace)
 end)
 
 -- Main render loop (wrapped so one bad frame never kills the aimbot)
